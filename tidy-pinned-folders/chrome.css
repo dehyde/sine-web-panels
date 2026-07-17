@@ -1,0 +1,5 @@
+.sineItem[mod-id="sine-tidy-pinned-folders"] > .sineItemPreferenceDialog {
+  width: 350px !important;
+  min-width: 0;
+  max-width: calc(100vw - 32px);
+}
