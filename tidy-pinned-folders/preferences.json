@@ -1,0 +1,8 @@
+[
+  {
+    "type": "checkbox",
+    "label": "Collapse child folders when a parent closes",
+    "property": "sine.tidy-pinned-folders.collapse-children-with-parent",
+    "defaultValue": true
+  }
+]
