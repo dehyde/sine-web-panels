@@ -1,0 +1,35 @@
+{
+  "id": "sine-tidy-pinned-folders",
+  "name": "Tidy Pinned Folders",
+  "description": "Keeps native Zen pinned folders tidy by collapsing open sibling folders when another folder is opened.",
+  "author": "Tom Bar-Gal",
+  "version": "0.1.0",
+  "createdAt": "2026-07-17",
+  "updatedAt": "2026-07-17",
+  "homepage": "https://github.com/dehyde/sine-web-panels/tree/main/tidy-pinned-folders",
+  "readme": "https://raw.githubusercontent.com/dehyde/sine-web-panels/main/tidy-pinned-folders/README.md",
+  "ai": "yes",
+  "js": true,
+  "style": {
+    "chrome": "chrome.css"
+  },
+  "supportsUnload": true,
+  "scripts": {
+    "scripts/tidy-pinned-folders.uc.js": {
+      "include": [
+        "chrome://browser/content/browser.xhtml"
+      ],
+      "loadOrder": 1
+    }
+  },
+  "tags": [
+    "folders",
+    "pinned-tabs",
+    "zen",
+    "sine"
+  ],
+  "fork": [
+    "zen"
+  ],
+  "preferences": "preferences.json"
+}
