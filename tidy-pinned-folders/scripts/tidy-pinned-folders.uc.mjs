@@ -1,7 +1,11 @@
 import {
   collapsePinnedFolders,
+  getPinnedActiveTabsToUnload,
   getPinnedFolderDescendants,
+  getPinnedFolderForTab,
+  getPinnedFolderUnloadController,
   getPinnedFoldersToCollapse,
+  getPinnedFoldersToCollapseForSelection,
   isPinnedZenFolder,
 } from "./tidy-pinned-folders-core.uc.mjs";
 
@@ -22,6 +26,9 @@ class SineTidyPinnedFolders {
       signal: this.#abortController.signal,
     });
     this.window.addEventListener("TabGroupCollapse", this.#onFolderCollapse, {
+      signal: this.#abortController.signal,
+    });
+    this.window.addEventListener("TabSelect", this.#onTabSelect, {
       signal: this.#abortController.signal,
     });
   }
@@ -57,6 +64,52 @@ class SineTidyPinnedFolders {
     } catch (error) {
       console.error(LOG_PREFIX + " Could not collapse child folders:", error);
     }
+  };
+
+  #onTabSelect = event => {
+    const selectedTab = event.target;
+
+    this.window.requestAnimationFrame(async () => {
+      try {
+        const activeTabs = Array.from(
+          this.window.document.querySelectorAll(
+            ".tabbrowser-tab[folder-active]"
+          )
+        );
+        const tabsToUnload = getPinnedActiveTabsToUnload(
+          selectedTab,
+          activeTabs
+        );
+        const unloadController = getPinnedFolderUnloadController(this.window);
+
+        if (tabsToUnload.length && !unloadController) {
+          console.error(`${LOG_PREFIX} Zen folder unload API is unavailable.`);
+        } else {
+          for (const activeTab of tabsToUnload) {
+            try {
+              await unloadController.animateUnload(
+                getPinnedFolderForTab(activeTab),
+                activeTab
+              );
+            } catch (error) {
+              console.error(`${LOG_PREFIX} Could not hide a stale active tab:`, error);
+            }
+          }
+        }
+
+        const pinnedFolders = Array.from(
+          this.window.document.querySelectorAll("zen-folder")
+        ).filter(isPinnedZenFolder);
+        collapsePinnedFolders(
+          getPinnedFoldersToCollapseForSelection(selectedTab, pinnedFolders)
+        );
+      } catch (error) {
+        console.error(
+          `${LOG_PREFIX} Could not tidy folders after tab selection:`,
+          error
+        );
+      }
+    });
   };
 }
 

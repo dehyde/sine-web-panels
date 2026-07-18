@@ -3,11 +3,16 @@ import test from "node:test";
 
 import {
   collapsePinnedFolders,
+  getPinnedActiveTabsToUnload,
   getPinnedFolderAncestors,
   getPinnedFolderDescendants,
+  getPinnedFolderForTab,
   getPinnedFolderSiblings,
+  getPinnedFolderUnloadController,
   getPinnedFoldersToCollapse,
+  getPinnedFoldersToCollapseForSelection,
   isPinnedZenFolder,
+  shouldUnloadPreviousPinnedTab,
 } from "../tidy-pinned-folders-core.uc.mjs";
 
 function folder({ collapsed = false, pinned = true } = {}) {
@@ -79,6 +84,137 @@ test("does not collapse folders that are already closed", () => {
   addSiblings(current, closedSibling);
 
   assert.deepEqual(getPinnedFoldersToCollapse(current), []);
+});
+
+test("keeps the selected tab's pinned-folder path open", () => {
+  const root = folder();
+  const rootSibling = folder();
+  const child = folder();
+  const childSibling = folder();
+  const selectedTab = { group: child };
+  child.group = root;
+
+  assert.equal(getPinnedFolderForTab(selectedTab), child);
+  assert.deepEqual(
+    getPinnedFoldersToCollapseForSelection(selectedTab, [
+      root,
+      rootSibling,
+      child,
+      childSibling,
+    ]),
+    [rootSibling, childSibling]
+  );
+});
+
+test("collapses all pinned folders when selecting a regular tab", () => {
+  const first = folder();
+  const second = folder();
+  const unpinned = folder({ pinned: false });
+
+  assert.equal(getPinnedFolderForTab({ group: unpinned }), null);
+  assert.deepEqual(
+    getPinnedFoldersToCollapseForSelection({ group: null }, [
+      first,
+      second,
+      unpinned,
+    ]),
+    [first, second]
+  );
+});
+
+test("unloads the previous active tab from a collapsed pinned folder", () => {
+  const pinnedFolder = folder();
+  const previousTab = {
+    group: pinnedFolder,
+    hasAttribute(name) {
+      return name === "folder-active";
+    },
+  };
+  const selectedTab = { group: null };
+
+  assert.equal(
+    shouldUnloadPreviousPinnedTab(previousTab, selectedTab),
+    true
+  );
+  assert.equal(
+    shouldUnloadPreviousPinnedTab(previousTab, previousTab),
+    false
+  );
+  assert.equal(
+    shouldUnloadPreviousPinnedTab(
+      { group: pinnedFolder, hasAttribute: () => false },
+      selectedTab
+    ),
+    false
+  );
+});
+
+test("finds every stale active tab outside the current selection", () => {
+  const firstFolder = folder();
+  const secondFolder = folder();
+  const activeTab = group => ({
+    group,
+    hasAttribute(name) {
+      return name === "folder-active";
+    },
+  });
+  const selectedTab = activeTab(secondFolder);
+  const staleFirst = activeTab(firstFolder);
+  const staleSecond = activeTab(firstFolder);
+  const inactiveTab = {
+    group: firstFolder,
+    hasAttribute() {
+      return false;
+    },
+  };
+
+  assert.deepEqual(
+    getPinnedActiveTabsToUnload(selectedTab, [
+      staleFirst,
+      selectedTab,
+      staleSecond,
+      inactiveTab,
+    ]),
+    [staleFirst, staleSecond]
+  );
+});
+
+test("uses the current Zen folder controller and supports the legacy API", () => {
+  const currentController = { animateUnload() {} };
+  const legacyController = { animateUnload() {} };
+
+  assert.equal(
+    getPinnedFolderUnloadController({
+      gZenFolders: currentController,
+      gZenLiveFoldersUI: legacyController,
+    }),
+    currentController
+  );
+  assert.equal(
+    getPinnedFolderUnloadController({
+      gZenLiveFoldersUI: legacyController,
+    }),
+    legacyController
+  );
+  assert.equal(
+    getPinnedFolderUnloadController({
+      gZenFolders: {},
+      gZenLiveFoldersUI: {},
+    }),
+    null
+  );
+});
+
+test("resolves a pinned folder through a split-view group", () => {
+  const pinnedFolder = folder();
+  const splitViewGroup = {
+    group: pinnedFolder,
+    hasAttribute(name) {
+      return name === "split-view-group";
+    },
+  };
+
+  assert.equal(getPinnedFolderForTab({ group: splitViewGroup }), pinnedFolder);
 });
 
 test("finds all pinned child folders below a parent", () => {
