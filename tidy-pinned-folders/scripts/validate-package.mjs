@@ -41,9 +41,18 @@ for (const field of ["id", "name", "description", "version", "style", "scripts"]
   }
 }
 
+if (Object.hasOwn(theme, "js")) {
+  throw new Error("theme.json must not use the legacy js property");
+}
+
+if (theme.author !== "dehyde") {
+  throw new Error("theme.json author must be the GitHub username: dehyde");
+}
+
 assertFile(theme.style.chrome);
 
 for (const [scriptPath, config] of Object.entries(theme.scripts)) {
+  const fullPath = assertFile(scriptPath);
   checkScript(scriptPath);
   if (
     !Array.isArray(config.include) ||
@@ -51,6 +60,18 @@ for (const [scriptPath, config] of Object.entries(theme.scripts)) {
   ) {
     throw new Error(`${scriptPath} must include chrome://browser/content/browser.xhtml`);
   }
+
+  if (
+    theme.supportsUnload &&
+    !readFileSync(fullPath, "utf8").includes("addUnloadListener")
+  ) {
+    throw new Error(
+      `${scriptPath} must register an unload callback when supportsUnload is true`
+    );
+  }
 }
+
+checkScript("scripts/tidy-pinned-folders.uc.mjs");
+checkScript("scripts/tidy-pinned-folders-core.uc.mjs");
 
 console.log("Tidy Pinned Folders package validation passed.");

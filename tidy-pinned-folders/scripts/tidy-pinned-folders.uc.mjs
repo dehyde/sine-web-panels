@@ -1,8 +1,10 @@
 import {
   collapsePinnedFolders,
+  getPinnedActiveFolderRoots,
   getPinnedActiveTabsToUnload,
   getPinnedFolderDescendants,
   getPinnedFolderForTab,
+  getPinnedFolderToUnload,
   getPinnedFolderUnloadController,
   getPinnedFoldersToCollapse,
   getPinnedFoldersToCollapseForSelection,
@@ -14,11 +16,15 @@ const LOG_PREFIX = "[Tidy Pinned Folders]";
 const COLLAPSE_CHILDREN_PREF =
   "sine.tidy-pinned-folders.collapse-children-with-parent";
 
-class SineTidyPinnedFolders {
+export class SineTidyPinnedFolders {
   #abortController = new AbortController();
+  #pendingFrames = new Set();
+  #selectedTab;
 
-  constructor(windowRef) {
+  constructor(windowRef, preferences = Services.prefs) {
     this.window = windowRef;
+    this.preferences = preferences;
+    this.#selectedTab = windowRef.gBrowser?.selectedTab ?? null;
   }
 
   init() {
@@ -29,12 +35,18 @@ class SineTidyPinnedFolders {
       signal: this.#abortController.signal,
     });
     this.window.addEventListener("TabSelect", this.#onTabSelect, {
+      capture: true,
       signal: this.#abortController.signal,
     });
   }
 
   destroy() {
     this.#abortController.abort();
+
+    for (const frameId of this.#pendingFrames) {
+      this.window.cancelAnimationFrame(frameId);
+    }
+    this.#pendingFrames.clear();
   }
 
   #onFolderExpand = event => {
@@ -54,7 +66,7 @@ class SineTidyPinnedFolders {
     const closedFolder = event.target;
     if (
       !isPinnedZenFolder(closedFolder) ||
-      !Services.prefs.getBoolPref(COLLAPSE_CHILDREN_PREF, true)
+      !this.preferences.getBoolPref(COLLAPSE_CHILDREN_PREF, true)
     ) {
       return;
     }
@@ -68,66 +80,122 @@ class SineTidyPinnedFolders {
 
   #onTabSelect = event => {
     const selectedTab = event.target;
+    const previousTab = this.#selectedTab;
+    const previousFolder = getPinnedFolderForTab(previousTab);
+    this.#selectedTab = selectedTab;
 
-    this.window.requestAnimationFrame(async () => {
-      try {
-        const activeTabs = Array.from(
-          this.window.document.querySelectorAll(
-            ".tabbrowser-tab[folder-active]"
-          )
-        );
-        const tabsToUnload = getPinnedActiveTabsToUnload(
-          selectedTab,
-          activeTabs
-        );
-        const unloadController = getPinnedFolderUnloadController(this.window);
+    const frameId = this.window.requestAnimationFrame(() => {
+      this.#pendingFrames.delete(frameId);
+      return this.#tidyAfterTabSelection(
+        selectedTab,
+        previousTab,
+        previousFolder
+      );
+    });
+    this.#pendingFrames.add(frameId);
+  };
 
-        if (tabsToUnload.length && !unloadController) {
-          console.error(`${LOG_PREFIX} Zen folder unload API is unavailable.`);
-        } else {
-          for (const activeTab of tabsToUnload) {
-            try {
-              await unloadController.animateUnload(
-                getPinnedFolderForTab(activeTab),
-                activeTab
-              );
-            } catch (error) {
-              console.error(`${LOG_PREFIX} Could not hide a stale active tab:`, error);
-            }
+  async #tidyAfterTabSelection(selectedTab, previousTab, previousFolder) {
+    if (this.#abortController.signal.aborted) {
+      return;
+    }
+
+    try {
+      const pinnedFolders = Array.from(
+        this.window.document.querySelectorAll("zen-folder")
+      ).filter(isPinnedZenFolder);
+      const foldersToCollapse = getPinnedFoldersToCollapseForSelection(
+        selectedTab,
+        pinnedFolders,
+        previousFolder
+      );
+      const activeFolderRoots = getPinnedActiveFolderRoots(foldersToCollapse);
+      const previousFolderToUnload = getPinnedFolderToUnload(
+        previousFolder,
+        selectedTab
+      );
+      const folderRootsToUnload = [
+        ...new Set(
+          [previousFolderToUnload, ...activeFolderRoots].filter(Boolean)
+        ),
+      ];
+      const activeTabs = Array.from(
+        this.window.document.querySelectorAll("[folder-active]")
+      );
+      const tabsToUnload = getPinnedActiveTabsToUnload(selectedTab, [
+        ...new Set([previousTab, ...activeTabs].filter(Boolean)),
+      ]);
+      const unloadController = getPinnedFolderUnloadController(this.window);
+      collapsePinnedFolders(foldersToCollapse);
+
+      if ((folderRootsToUnload.length || tabsToUnload.length) && !unloadController) {
+        console.error(`${LOG_PREFIX} Zen folder unload API is unavailable.`);
+      } else if (
+        folderRootsToUnload.length &&
+        typeof unloadController?.animateUnloadAll === "function"
+      ) {
+        for (const activeFolder of folderRootsToUnload) {
+          if (this.#abortController.signal.aborted) {
+            return;
+          }
+
+          try {
+            await unloadController.animateUnloadAll(activeFolder);
+          } catch (error) {
+            console.error(
+              `${LOG_PREFIX} Could not hide a stale active folder:`,
+              error
+            );
           }
         }
+      } else {
+        for (const activeTab of tabsToUnload) {
+          if (this.#abortController.signal.aborted) {
+            return;
+          }
 
-        const pinnedFolders = Array.from(
-          this.window.document.querySelectorAll("zen-folder")
-        ).filter(isPinnedZenFolder);
-        collapsePinnedFolders(
-          getPinnedFoldersToCollapseForSelection(selectedTab, pinnedFolders)
-        );
-      } catch (error) {
-        console.error(
-          `${LOG_PREFIX} Could not tidy folders after tab selection:`,
-          error
-        );
+          try {
+            await unloadController.animateUnload(
+              getPinnedFolderForTab(activeTab),
+              activeTab
+            );
+          } catch (error) {
+            console.error(
+              `${LOG_PREFIX} Could not hide a stale active tab:`,
+              error
+            );
+          }
+        }
       }
-    });
-  };
+    } catch (error) {
+      console.error(
+        `${LOG_PREFIX} Could not tidy folders after tab selection:`,
+        error
+      );
+    }
+  }
 }
 
-window[INSTANCE_KEY]?.destroy();
+export function installSineTidyPinnedFolders(
+  windowRef,
+  preferences = Services.prefs
+) {
+  windowRef[INSTANCE_KEY]?.destroy();
 
-const mod = new SineTidyPinnedFolders(window);
-mod.init();
-window[INSTANCE_KEY] = mod;
+  const mod = new SineTidyPinnedFolders(windowRef, preferences);
+  mod.init();
+  windowRef[INSTANCE_KEY] = mod;
 
-const destroy = () => {
-  mod.destroy();
-  if (window[INSTANCE_KEY] === mod) {
-    delete window[INSTANCE_KEY];
-  }
-};
+  let destroyed = false;
+  return () => {
+    if (destroyed) {
+      return;
+    }
 
-if (typeof window.addUnloadListener === "function") {
-  window.addUnloadListener(destroy);
-} else {
-  window.addEventListener("unload", destroy, { once: true });
+    destroyed = true;
+    mod.destroy();
+    if (windowRef[INSTANCE_KEY] === mod) {
+      delete windowRef[INSTANCE_KEY];
+    }
+  };
 }

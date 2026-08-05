@@ -10,7 +10,7 @@ When collapsed folders are temporarily showing active tabs, selecting another ta
 
 The mod also includes an enabled-by-default **Collapse child folders when a parent closes** setting. Disable it from the mod's **Open settings** panel when you want a parent folder to remember which nested folders were open.
 
-The mod uses Zen's own folder-collapse behavior, supports both the current and legacy Zen folder APIs, and does not modify Zen source files.
+The mod uses Zen's own folder-collapse behavior, supports both the current and legacy Zen folder APIs, and does not modify Zen source files. It supports live unloading in Sine: disabling the mod removes its event listeners, cancels pending animation work, and clears its window singleton so it can be re-enabled without restarting Zen.
 
 ## Install
 
@@ -36,3 +36,4 @@ Manual checks:
 - Select a regular tab and confirm all pinned folders close.
 - Close a parent pinned folder and confirm all of its nested folders close; disable the setting and confirm they keep their open state.
 - Expand or collapse an unpinned folder and confirm this mod does nothing.
+- Disable the mod and confirm opening pinned folders no longer closes their siblings; re-enable it without restarting Zen and confirm the tidy behavior resumes once, without duplicate listeners.

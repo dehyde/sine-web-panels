@@ -40,7 +40,50 @@ export function getPinnedFolderForTab(tab) {
     group = group.group;
   }
 
-  return isPinnedZenFolder(group) ? group : null;
+  if (isPinnedZenFolder(group)) {
+    return group;
+  }
+
+  const closestFolder = tab?.closest?.("zen-folder");
+  if (isPinnedZenFolder(closestFolder)) {
+    return closestFolder;
+  }
+
+  return (
+    Array.from(
+      tab?.ownerDocument?.querySelectorAll?.("zen-folder") ?? []
+    ).find(
+      folder =>
+        isPinnedZenFolder(folder) &&
+        (folder.tabs?.includes?.(tab) || folder.contains?.(tab))
+    ) ?? null
+  );
+}
+
+export function getPinnedFolderToUnload(previousFolder, selectedTab) {
+  if (!previousFolder) {
+    return null;
+  }
+
+  const selectedFolderPath = new Set(
+    getPinnedFolderAncestors(getPinnedFolderForTab(selectedTab))
+  );
+  if (selectedFolderPath.has(previousFolder)) {
+    return null;
+  }
+
+  return previousFolder.rootMostCollapsedFolder ?? previousFolder;
+}
+
+export function getPinnedFolderToUnloadForSelection(previousTab, selectedTab) {
+  if (!previousTab || previousTab === selectedTab) {
+    return null;
+  }
+
+  return getPinnedFolderToUnload(
+    getPinnedFolderForTab(previousTab),
+    selectedTab
+  );
 }
 
 export function shouldUnloadPreviousPinnedTab(previousTab, selectedTab) {
@@ -58,6 +101,28 @@ export function getPinnedActiveTabsToUnload(selectedTab, tabs) {
   );
 }
 
+export function getPinnedActiveFolderRoots(folders) {
+  const activeFolders = folders.filter(
+    folder =>
+      isPinnedZenFolder(folder) &&
+      folder.hasAttribute?.("has-active")
+  );
+  const activeFolderSet = new Set(activeFolders);
+
+  return activeFolders.filter(folder => {
+    let parentFolder = folder.group;
+
+    while (isPinnedZenFolder(parentFolder)) {
+      if (activeFolderSet.has(parentFolder)) {
+        return false;
+      }
+      parentFolder = parentFolder.group;
+    }
+
+    return true;
+  });
+}
+
 export function getPinnedFolderUnloadController(windowRef) {
   const controllers = [
     windowRef?.gZenFolders,
@@ -66,7 +131,9 @@ export function getPinnedFolderUnloadController(windowRef) {
 
   return (
     controllers.find(
-      controller => typeof controller?.animateUnload === "function"
+      controller =>
+        typeof controller?.animateUnloadAll === "function" ||
+        typeof controller?.animateUnload === "function"
     ) ?? null
   );
 }
@@ -79,13 +146,21 @@ export function getPinnedFoldersToCollapse(openedFolder) {
   ].filter(folder => !folder.collapsed);
 }
 
-export function getPinnedFoldersToCollapseForSelection(selectedTab, folders) {
+export function getPinnedFoldersToCollapseForSelection(
+  selectedTab,
+  folders,
+  previousFolder = null
+) {
+  const selectedFolder = getPinnedFolderForTab(selectedTab);
   const activeFolderPath = new Set(
-    getPinnedFolderAncestors(getPinnedFolderForTab(selectedTab))
+    getPinnedFolderAncestors(selectedFolder)
   );
 
   return folders.filter(
-    folder => isPinnedZenFolder(folder) && !activeFolderPath.has(folder)
+    folder =>
+      isPinnedZenFolder(folder) &&
+      (!activeFolderPath.has(folder) ||
+        (folder === previousFolder && folder !== selectedFolder))
   );
 }
 
