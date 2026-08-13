@@ -455,10 +455,17 @@ class SineWebPanels {
     parentBrowser.docShellIsActive = true;
     panelBrowser.zenModeActive = true;
     panelBrowser.docShellIsActive = true;
-    if (this.window.gBrowser?.selectedTab === panelTab && parentTab) {
-      this.window.gBrowser.selectedTab = parentTab;
+    // Select the PANEL tab, not the parent. WebExtensions resolve context via
+    // tabs.query({active:true}); with the parent selected, password managers
+    // offer credentials for the page BEHIND the panel instead of the panel's
+    // own site. The parent stays _visuallySelected so the sidebar still
+    // highlights it, which is what the original behaviour was really after.
+    if (this.window.gBrowser && this.window.gBrowser.selectedTab !== panelTab) {
+      this.window.gBrowser.selectedTab = panelTab;
     }
-    parentTab._visuallySelected = true;
+    if (parentTab) {
+      parentTab._visuallySelected = true;
+    }
     this.#surfaceState = {
       parentTab,
       panelTab,
@@ -1003,8 +1010,12 @@ class SineWebPanels {
 
     const selectedTab = this.window.gBrowser?.selectedTab;
     const panelTab = this.#runtime?.get(this.#activeId)?.tab;
-    if (selectedTab === panelTab && this.#activeParentTab && !this.#activeParentTab.closing) {
-      this.window.gBrowser.selectedTab = this.#activeParentTab;
+    // The panel tab is intentionally the selected tab while a panel is open,
+    // so do not bounce selection back to the parent.
+    if (selectedTab === panelTab) {
+      if (this.#activeParentTab && !this.#activeParentTab.closing) {
+        this.#activeParentTab._visuallySelected = true;
+      }
       return;
     }
 
