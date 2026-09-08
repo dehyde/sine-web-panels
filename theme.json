@@ -1,16 +1,10 @@
 {
   "id": "sine-web-panels",
   "name": "Web Panels",
-  "description": "Adds a Zen Browser web panel rail backed by managed hidden tabs for extension-compatible quick web app access.",
+  "description": "Adds a lightweight web panel rail for quick access to saved web apps in Firefox-family browsers through Sine.",
   "author": "Tom Bar-Gal",
-  "version": "0.4.0",
-  "createdAt": "2026-06-22",
-  "updatedAt": "2026-06-25",
+  "version": "0.3.0",
   "homepage": "https://github.com/dehyde/sine-web-panels",
-  "readme": "https://raw.githubusercontent.com/dehyde/sine-web-panels/main/README.md",
-  "image": "https://raw.githubusercontent.com/dehyde/sine-web-panels/main/assets/preview.svg",
-  "ai": "yes",
-  "js": true,
   "style": {
     "chrome": "userChrome.css"
   },
@@ -39,12 +33,14 @@
   "tags": [
     "web-panels",
     "sidebar",
-    "productivity",
     "chrome",
-    "JavaScript",
     "sine"
   ],
   "fork": [
-    "zen"
+    "firefox",
+    "zen",
+    "waterfox",
+    "floorp",
+    "librewolf"
   ]
 }

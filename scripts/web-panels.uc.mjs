@@ -1,22 +1,210 @@
-import { WebPanelsRuntime } from "./web-panels-runtime.uc.mjs";
-import {
+const MODULE_VERSION = new URL(import.meta.url).search;
+
+const {
+  WEB_PANEL_RUNTIME_INVALIDATED_EVENT,
+  WebPanelsRuntime,
+} = await import(`./web-panels-runtime.uc.mjs${MODULE_VERSION}`);
+const { WebPanelPermissionRouter } = await import(
+  `./web-panels-permissions.uc.mjs${MODULE_VERSION}`
+);
+const {
   MIN_PANEL_WIDTH,
   PANEL_TYPE,
   SEPARATOR_TYPE,
   WebPanelsStore,
   normalizeWebPanelUrl,
   parseWebPanelUnreadCount,
-} from "./web-panels-store.uc.mjs";
+} = await import(`./web-panels-store.uc.mjs${MODULE_VERSION}`);
 
 const ROOT_ID = "sine-web-panels-root";
 const RAIL_ID = "sine-web-panels-rail";
 const LIST_ID = "sine-web-panels-list";
 const ADD_BUTTON_ID = "sine-web-panels-add-button";
+const SURFACE_ID = "sine-web-panels-surface";
 const BACKDROP_ID = "sine-web-panels-backdrop";
 const MENU_ID = "sine-web-panels-menu";
 const EDITOR_ID = "sine-web-panels-editor";
 const TAB_MENU_ITEM_ID = "sine-web-panels-tab-context-add";
-const RESIZER_ID = "sine-web-panels-resizer";
+const CONTENT_CONTEXT_MENU_ID = "contentAreaContextMenu";
+const CONTENT_RESET_MENU_ITEM_ID = "sine-web-panels-context-reset";
+const WEB_PANEL_CONTEXT_NAVIGATION_IDS = Object.freeze([
+  "context-back",
+  "context-forward",
+  "context-reload",
+  "context-stop",
+]);
+const INSTANCE_KEY = "__sineWebPanelsInstance";
+export const PANEL_VIEWPORT_INSET = 8;
+export const PANEL_VIEWPORT_MAX_WIDTH_RATIO = 0.95;
+
+function snapshotAttribute(element, name) {
+  return {
+    element,
+    name,
+    present: element.hasAttribute(name),
+    value: element.getAttribute(name),
+  };
+}
+
+function restoreAttribute(snapshot) {
+  if (snapshot.present) {
+    snapshot.element.setAttribute(snapshot.name, snapshot.value);
+  } else {
+    snapshot.element.removeAttribute(snapshot.name);
+  }
+}
+
+export function configureWebPanelContextNavigation(documentRef, browser, tab) {
+  const snapshots = [];
+  const remember = (element, name) => {
+    snapshots.push(snapshotAttribute(element, name));
+  };
+  const items = new Map(
+    WEB_PANEL_CONTEXT_NAVIGATION_IDS.map(id => [id, documentRef.getElementById(id)])
+  );
+
+  for (const item of items.values()) {
+    if (!item) {
+      continue;
+    }
+    remember(item, "command");
+    item.removeAttribute("command");
+  }
+
+  const back = items.get("context-back");
+  if (back) {
+    remember(back, "disabled");
+    back.toggleAttribute("disabled", !browser?.canGoBack);
+  }
+
+  const forward = items.get("context-forward");
+  if (forward) {
+    remember(forward, "disabled");
+    forward.toggleAttribute("disabled", !browser?.canGoForward);
+  }
+
+  const isLoading = Boolean(
+    browser?.webProgress?.isLoadingDocument || tab?.hasAttribute?.("busy")
+  );
+  const reload = items.get("context-reload");
+  if (reload) {
+    remember(reload, "hidden");
+    remember(reload, "disabled");
+    reload.toggleAttribute("hidden", isLoading);
+    reload.removeAttribute("disabled");
+  }
+
+  const stop = items.get("context-stop");
+  if (stop) {
+    remember(stop, "hidden");
+    remember(stop, "disabled");
+    stop.toggleAttribute("hidden", !isLoading);
+    stop.removeAttribute("disabled");
+  }
+
+  let restored = false;
+  return () => {
+    if (restored) {
+      return;
+    }
+    restored = true;
+    for (const snapshot of snapshots.reverse()) {
+      restoreAttribute(snapshot);
+    }
+  };
+}
+
+export function routeWebPanelNavigationCommand(commandId, options = {}) {
+  if (!WEB_PANEL_CONTEXT_NAVIGATION_IDS.includes(commandId)) {
+    return false;
+  }
+
+  const {
+    browser,
+    tab,
+    event = {},
+    navigationFlags = {},
+  } = options;
+  if (!browser || !tab) {
+    return true;
+  }
+
+  switch (commandId) {
+    case "context-back":
+      if (browser.canGoBack) {
+        browser.goBack(false);
+      }
+      break;
+    case "context-forward":
+      if (browser.canGoForward) {
+        browser.goForward(false);
+      }
+      break;
+    case "context-reload": {
+      const flags = event.shiftKey || browser.currentURI?.schemeIs?.("view-source")
+        ? (navigationFlags.bypassProxy ?? 0) | (navigationFlags.bypassCache ?? 0)
+        : navigationFlags.none ?? 0;
+      browser.reloadWithFlags(flags);
+      break;
+    }
+    case "context-stop":
+      browser.stop();
+      break;
+  }
+  return true;
+}
+
+function positiveNumber(value, fallback) {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? value
+    : fallback;
+}
+
+export function calculateWebPanelViewportGeometry(rect, fallbackViewport = {}) {
+  const top = typeof rect?.top === "number" && Number.isFinite(rect.top)
+    ? rect.top
+    : 0;
+  const left = typeof rect?.left === "number" && Number.isFinite(rect.left)
+    ? rect.left
+    : 0;
+  const width = positiveNumber(rect?.width, positiveNumber(fallbackViewport.width, 1));
+  const height = positiveNumber(
+    rect?.height,
+    positiveNumber(fallbackViewport.height, PANEL_VIEWPORT_INSET * 2)
+  );
+  const fallbackTop = typeof fallbackViewport.top === "number" && Number.isFinite(fallbackViewport.top)
+    ? fallbackViewport.top
+    : top;
+  const fallbackLeft = typeof fallbackViewport.left === "number" && Number.isFinite(fallbackViewport.left)
+    ? fallbackViewport.left
+    : left;
+  const fallbackWidth = positiveNumber(fallbackViewport.width, width);
+  const fallbackHeight = positiveNumber(fallbackViewport.height, height);
+  const visibleTop = Math.max(top, fallbackTop);
+  const visibleBottom = Math.min(top + height, fallbackTop + fallbackHeight);
+  const visibleLeft = Math.max(left, fallbackLeft);
+  const visibleRight = Math.min(left + width, fallbackLeft + fallbackWidth);
+  const visibleHeight = Math.max(0, visibleBottom - visibleTop);
+  const visibleWidth = Math.max(0, visibleRight - visibleLeft);
+
+  return {
+    top: visibleTop + PANEL_VIEWPORT_INSET,
+    height: Math.max(0, visibleHeight - PANEL_VIEWPORT_INSET * 2),
+    maxWidth: Math.max(1, Math.floor(visibleWidth * PANEL_VIEWPORT_MAX_WIDTH_RATIO)),
+  };
+}
+
+export function clampWebPanelWidth(width, maxWidth, minWidth = MIN_PANEL_WIDTH) {
+  const safeMax = Math.max(1, Math.floor(Number(maxWidth) || 1));
+  const safeMin = Math.min(
+    safeMax,
+    Math.max(1, Math.round(Number(minWidth) || MIN_PANEL_WIDTH))
+  );
+  const requestedWidth = Number.isFinite(Number(width))
+    ? Math.round(Number(width))
+    : safeMin;
+  return Math.min(safeMax, Math.max(safeMin, requestedWidth));
+}
 
 function isPanel(item) {
   return item?.type === PANEL_TYPE;
@@ -30,42 +218,39 @@ function displayCount(count) {
   return Number.isInteger(count) && count > 0 ? (count > 99 ? "99+" : String(count)) : "";
 }
 
-function fallbackFaviconUrl(panelUrl) {
-  try {
-    return new URL("/favicon.ico", panelUrl).href;
-  } catch {
-    return "";
-  }
-}
-
 class SineWebPanels {
   #store = new WebPanelsStore();
   #root;
   #rail;
   #list;
-  #resizer;
+  #surface;
+  #surfaceShell;
   #backdrop;
   #editor;
   #menu;
   #browserChrome;
   #contentContainer;
+  #pageViewportElement;
+  #pageViewportResizeObserver;
   #tabContextMenuItem;
+  #contentContextMenu;
+  #contentResetMenuItem;
+  #panelContextState = null;
   #runtime;
+  #permissions;
   #items = [];
   #activeId = null;
-  #activeParentTab = null;
-  #surfaceState = null;
-  #closeTimer = null;
   #editorState = null;
   #railInsertIndex = null;
   #unreadCounts = new Map();
   #menuOpenedAt = 0;
-  #ignoreOutsideClicksUntil = 0;
   #abortController = new AbortController();
   #prefObserver;
   #resizeState = null;
-  #resizeHovering = false;
   #dragState = null;
+  #openTransitionTimer = null;
+  #closeTransitionTimer = null;
+  #destroyed = false;
 
   constructor(windowRef) {
     this.window = windowRef;
@@ -76,42 +261,50 @@ class SineWebPanels {
     this.destroyExistingRoot();
     this.#items = this.#store.loadItems({ persistNormalized: true });
     this.#mount();
-    this.#runtime = new WebPanelsRuntime(this.window);
+    this.#runtime = new WebPanelsRuntime(this.window, this.#surface);
+    this.#permissions = new WebPanelPermissionRouter(this.window);
     this.#applyEnabledState();
     this.#observePrefs();
   }
 
   destroyExistingRoot() {
     this.document.getElementById(ROOT_ID)?.remove();
-    this.document.getElementById(RESIZER_ID)?.remove();
     this.document.getElementById(EDITOR_ID)?.remove();
     this.document.getElementById(TAB_MENU_ITEM_ID)?.remove();
-    this.#clearOrphanedOverlayState();
+    this.document.getElementById(CONTENT_RESET_MENU_ITEM_ID)?.remove();
   }
 
   destroy() {
-    this.#abortController.abort();
-    if (this.#closeTimer) {
-      this.window.clearTimeout(this.#closeTimer);
-      this.#closeTimer = null;
+    if (this.#destroyed) {
+      return;
     }
-    this.#setResizeHover(false);
-    this.#closeSurface({ selectParent: false });
+    this.#destroyed = true;
+    this.#hideContentContextMenu();
+    this.#resetContentContextState();
+    this.#abortController.abort();
+    this.#clearOpenTransitionTimer();
+    this.#clearCloseTransitionTimer();
     if (this.#prefObserver) {
       Services.prefs.removeObserver(WebPanelsStore.prefs.enabled, this.#prefObserver);
+      this.#prefObserver = null;
     }
+    this.#permissions?.destroy();
+    this.#permissions = null;
     this.#runtime?.destroy();
+    this.#runtime = null;
+    this.#pageViewportResizeObserver?.disconnect();
+    this.#pageViewportResizeObserver = null;
+    this.#pageViewportElement = null;
     this.#resetChromeLayout();
     this.#editor?.remove();
     this.#tabContextMenuItem?.remove();
-    this.#resizer?.remove();
+    this.#contentResetMenuItem?.remove();
     this.#root?.remove();
     this.#activeId = null;
-    this.#activeParentTab = null;
-    this.#surfaceState = null;
     this.#editor = null;
     this.#tabContextMenuItem = null;
-    this.#resizer = null;
+    this.#contentContextMenu = null;
+    this.#contentResetMenuItem = null;
     this.#root = null;
   }
 
@@ -127,16 +320,17 @@ class SineWebPanels {
       side: this.#placementSide(),
     });
     this.#root.style.setProperty("--sine-web-panels-width", `${this.#store.width}px`);
-    this.document.documentElement.style.setProperty("--sine-web-panels-width", `${this.#store.width}px`);
 
     this.#backdrop = this.#el("div", { id: BACKDROP_ID, hidden: "true" });
-    this.#resizer = this.#el("div", {
-      id: RESIZER_ID,
+    this.#surfaceShell = this.#el("div", { id: "sine-web-panels-shell", hidden: "true" });
+    const resizer = this.#el("div", {
+      id: "sine-web-panels-resizer",
       role: "separator",
       "aria-orientation": "vertical",
       title: "Resize Web Panel",
-      hidden: "true",
     });
+    this.#surface = this.#el("div", { id: SURFACE_ID });
+    this.#surfaceShell.append(resizer, this.#surface);
 
     this.#rail = this.#el("div", {
       id: RAIL_ID,
@@ -156,10 +350,16 @@ class SineWebPanels {
     this.#editor = this.#buildEditor();
     this.#menu = this.#el("div", { id: MENU_ID, hidden: "true", role: "menu" });
 
-    this.#root.append(this.#backdrop, this.#rail, this.#menu);
-    this.#browserChrome.append(this.#root, this.#resizer);
+    this.#root.append(this.#backdrop, this.#surfaceShell, this.#rail, this.#menu);
+    this.#browserChrome.append(this.#root);
     (this.document.getElementById("mainPopupSet") ?? this.#browserChrome).append(this.#editor);
     this.#mountTabContextMenuItem();
+    this.#mountContentContextMenu();
+    if (typeof this.window.ResizeObserver === "function") {
+      this.#pageViewportResizeObserver = new this.window.ResizeObserver(
+        this.#onPageViewportResize
+      );
+    }
     this.#syncChromeLayout();
 
     const signal = this.#abortController.signal;
@@ -167,21 +367,26 @@ class SineWebPanels {
       event.stopPropagation();
       this.#openEditor({ mode: "add", anchor: addButton, insertIndex: this.#items.length });
     }, { signal });
-    this.#backdrop.addEventListener("click", event => {
-      if (!this.#isPointInsideActivePanel(event.clientX, event.clientY)) {
-        this.#closePanel();
+    this.#backdrop.addEventListener("click", () => this.#closePanel(), { signal });
+    this.#surfaceShell.addEventListener("click", event => event.stopPropagation(), { signal });
+    this.#surface.addEventListener(WEB_PANEL_RUNTIME_INVALIDATED_EVENT, event => {
+      if (event.detail?.panelId === this.#activeId) {
+        this.#closePanel({ animate: false });
       }
     }, { signal });
     this.#rail.addEventListener("contextmenu", this.#onRailContextMenu, { signal });
-    this.window.addEventListener("pointerdown", this.#onWindowPointerDown, { signal, capture: true });
+    resizer.addEventListener("pointerdown", this.#onResizeStart, { signal });
     this.window.addEventListener("pointermove", this.#onPointerMove, { signal });
     this.window.addEventListener("pointerup", this.#onPointerUp, { signal });
+    this.window.addEventListener("pointercancel", this.#onPointerUp, { signal });
     this.window.addEventListener("resize", this.#onWindowResize, { signal });
+    this.window.gBrowser?.tabContainer?.addEventListener(
+      "TabSelect",
+      this.#onPageViewportChange,
+      { signal }
+    );
     this.document.addEventListener("click", this.#onDocumentClick, { signal });
     this.document.addEventListener("keydown", this.#onKeyDown, { signal });
-    this.window.gBrowser?.tabContainer?.addEventListener("TabSelect", this.#onTabSelect, { signal });
-    this.window.gBrowser?.tabContainer?.addEventListener("TabClose", this.#onTabClose, { signal });
-    this.window.gBrowser?.tabContainer?.addEventListener("TabAttrModified", this.#onTabAttrModified, { signal });
     this.#render();
   }
 
@@ -211,6 +416,295 @@ class SineWebPanels {
     this.#tabContextMenuItem = menuItem;
   }
 
+  #mountContentContextMenu() {
+    this.#contentContextMenu = this.document.getElementById(CONTENT_CONTEXT_MENU_ID);
+    if (!this.#contentContextMenu) {
+      console.warn("[Web Panels] Content context menu was not found.");
+      return;
+    }
+
+    const signal = this.#abortController.signal;
+    const resetItem = this.#xul("menuitem", {
+      id: CONTENT_RESET_MENU_ITEM_ID,
+      label: "Reset Web Panel",
+      hidden: "true",
+    });
+    const navigationSeparator = this.document.getElementById(
+      "context-sep-navigation"
+    );
+    this.#contentContextMenu.insertBefore(resetItem, navigationSeparator ?? null);
+    resetItem.addEventListener("command", this.#onResetPanelFromContentMenu, {
+      signal,
+    });
+    this.#contentResetMenuItem = resetItem;
+    this.#contentContextMenu.addEventListener(
+      "popupshowing",
+      this.#onContentContextMenuShowing,
+      { signal }
+    );
+    this.#contentContextMenu.addEventListener(
+      "popuphiding",
+      this.#onContentContextMenuHiding,
+      { signal }
+    );
+    this.#contentContextMenu.addEventListener(
+      "command",
+      this.#onContentContextMenuCommand,
+      { capture: true, signal }
+    );
+  }
+
+  #activeContentContextTarget(contextMenu = this.window.gContextMenu) {
+    if (!this.#activeId || !this.#runtime) {
+      return null;
+    }
+    const panelId = this.#activeId;
+    const browser = this.#runtime.getBrowser(panelId);
+    if (!browser || contextMenu?.browser !== browser) {
+      return null;
+    }
+    const tab = this.window.gBrowser?.getTabForBrowser?.(browser);
+    if (!tab || tab.linkedBrowser !== browser) {
+      return null;
+    }
+    return { panelId, browser, tab, contextMenu };
+  }
+
+  #isContentContextStateValid(state) {
+    if (!state || this.#panelContextState !== state || state.panelId !== this.#activeId) {
+      return false;
+    }
+    const { browser, contextMenu, tab } = state;
+    return (
+      contextMenu?.browser === browser &&
+      this.#runtime?.getBrowser(state.panelId) === browser &&
+      this.window.gBrowser?.getTabForBrowser?.(browser) === tab &&
+      tab.linkedBrowser === browser
+    );
+  }
+
+  #patchPanelContextMethod(state, name, replacement) {
+    const { contextMenu } = state;
+    const originalDescriptor = Object.getOwnPropertyDescriptor(contextMenu, name);
+    const originalMethod = contextMenu[name];
+    if (typeof originalMethod !== "function") {
+      return false;
+    }
+    state.methodDescriptors.push({ name, originalDescriptor });
+    Object.defineProperty(contextMenu, name, {
+      configurable: true,
+      writable: true,
+      value: (...args) => {
+        if (!this.#isContentContextStateValid(state)) {
+          console.warn("[Web Panels] Ignored a stale panel context action.", {
+            action: name,
+            panelId: state.panelId,
+          });
+          return undefined;
+        }
+        try {
+          return replacement(originalMethod.bind(contextMenu), ...args);
+        } catch (error) {
+          console.error("[Web Panels] Panel context action failed.", {
+            action: name,
+            error,
+            panelId: state.panelId,
+          });
+          return undefined;
+        }
+      },
+    });
+    return true;
+  }
+
+  #installPanelContextOverrides(state) {
+    const { browser, contextMenu, tab } = state;
+    this.#patchPanelContextMethod(state, "openLinkInCurrent", () => {
+      this.window.openLinkIn(
+        contextMenu.linkURL,
+        "current",
+        contextMenu._openLinkInParameters({ targetBrowser: browser })
+      );
+    });
+    this.#patchPanelContextMethod(state, "showOnlyThisFrame", () => {
+      this.window.urlSecurityCheck(
+        contextMenu.contentData.docLocation,
+        browser.contentPrincipal,
+        Ci.nsIScriptSecurityManager.DISALLOW_SCRIPT
+      );
+      this.window.openWebLinkIn(contextMenu.contentData.docLocation, "current", {
+        referrerInfo: contextMenu.contentData.frameReferrerInfo,
+        triggeringPrincipal: browser.contentPrincipal,
+        targetBrowser: browser,
+      });
+    });
+    this.#patchPanelContextMethod(state, "bookmarkThisPage", () => {
+      const url = browser.currentURI?.spec;
+      if (!url) {
+        throw new Error("The panel page URL is unavailable for bookmarking.");
+      }
+      const result = this.window.top.PlacesCommandHook.bookmarkLink(
+        url,
+        browser.contentTitle || url
+      );
+      result?.catch?.(error => {
+        console.error("[Web Panels] Could not bookmark the panel page.", error);
+      });
+      return result;
+    });
+    this.#patchPanelContextMethod(state, "inspectNode", () => {
+      const { DevToolsShim } = ChromeUtils.importESModule(
+        "chrome://devtools-startup/content/DevToolsShim.sys.mjs"
+      );
+      return DevToolsShim.inspectNode(tab, contextMenu.targetIdentifier);
+    });
+    this.#patchPanelContextMethod(state, "inspectA11Y", () => {
+      const { DevToolsShim } = ChromeUtils.importESModule(
+        "chrome://devtools-startup/content/DevToolsShim.sys.mjs"
+      );
+      return DevToolsShim.inspectA11Y(tab, contextMenu.targetIdentifier);
+    });
+    this.#patchPanelContextMethod(state, "switchPageDirection", () => {
+      browser.sendMessageToActor(
+        "SwitchDocumentDirection",
+        {},
+        "SwitchDocumentDirection",
+        "roots"
+      );
+    });
+    this.#hideSelectedTabOnlyContextItems(state);
+    this.#patchSendPageToDevice(state);
+  }
+
+  #hideSelectedTabOnlyContextItems(state) {
+    const screenshot = this.document.getElementById("context-take-screenshot");
+    if (!screenshot) {
+      return;
+    }
+    state.itemAttributeSnapshots.push(snapshotAttribute(screenshot, "hidden"));
+    screenshot.setAttribute("hidden", "true");
+  }
+
+  #patchSendPageToDevice(state) {
+    const sync = this.window.gSync;
+    const name = "populateSendTabToDevicesMenu";
+    const originalMethod = sync?.[name];
+    if (typeof originalMethod !== "function") {
+      return;
+    }
+    const originalDescriptor = Object.getOwnPropertyDescriptor(sync, name);
+    state.externalMethodDescriptors.push({
+      name,
+      originalDescriptor,
+      target: sync,
+    });
+    Object.defineProperty(sync, name, {
+      configurable: true,
+      writable: true,
+      value: (popup, uri, title, options) => {
+        const isPanelPageMenu =
+          popup?.id === "context-sendpagetodevice-popup" &&
+          options?.contextMenuType === "page";
+        if (!isPanelPageMenu) {
+          return originalMethod.call(sync, popup, uri, title, options);
+        }
+        if (!this.#isContentContextStateValid(state)) {
+          console.warn("[Web Panels] Ignored a stale Send Page context menu.", {
+            panelId: state.panelId,
+          });
+          return undefined;
+        }
+        return originalMethod.call(
+          sync,
+          popup,
+          state.browser.currentURI,
+          state.browser.contentTitle,
+          options
+        );
+      },
+    });
+  }
+
+  #resetContentContextState() {
+    this.#contentResetMenuItem?.setAttribute("hidden", "true");
+    const state = this.#panelContextState;
+    if (!state) {
+      return;
+    }
+    this.#panelContextState = null;
+
+    try {
+      state.restoreNavigation?.();
+    } catch (error) {
+      console.error("[Web Panels] Could not restore native context navigation.", error);
+    }
+    for (const { name, originalDescriptor } of state.methodDescriptors.reverse()) {
+      try {
+        if (originalDescriptor) {
+          Object.defineProperty(state.contextMenu, name, originalDescriptor);
+        } else {
+          delete state.contextMenu[name];
+        }
+      } catch (error) {
+        console.error("[Web Panels] Could not restore a native context action.", {
+          action: name,
+          error,
+        });
+      }
+    }
+    for (const snapshot of state.itemAttributeSnapshots.reverse()) {
+      try {
+        restoreAttribute(snapshot);
+      } catch (error) {
+        console.error("[Web Panels] Could not restore a native context item.", {
+          error,
+          itemId: snapshot.element.id,
+        });
+      }
+    }
+    for (const { name, originalDescriptor, target } of state.externalMethodDescriptors.reverse()) {
+      try {
+        if (originalDescriptor) {
+          Object.defineProperty(target, name, originalDescriptor);
+        } else {
+          delete target[name];
+        }
+      } catch (error) {
+        console.error("[Web Panels] Could not restore a native context service.", {
+          action: name,
+          error,
+        });
+      }
+    }
+  }
+
+  #hideContentContextMenu() {
+    if (!this.#panelContextState) {
+      return;
+    }
+    try {
+      if (
+        typeof this.#contentContextMenu?.hidePopup === "function" &&
+        this.#contentContextMenu.state !== "closed"
+      ) {
+        this.#contentContextMenu.hidePopup();
+      }
+    } catch (error) {
+      console.error("[Web Panels] Could not close the native content context menu.", error);
+    } finally {
+      this.#resetContentContextState();
+    }
+  }
+
+  #deferContentContextMenuHide() {
+    const queueMicrotaskRef = this.window.queueMicrotask ?? globalThis.queueMicrotask;
+    if (typeof queueMicrotaskRef !== "function") {
+      this.#hideContentContextMenu();
+      return;
+    }
+    queueMicrotaskRef(() => this.#hideContentContextMenu());
+  }
+
   #observePrefs() {
     this.#prefObserver = {
       observe: (_subject, topic, prefName) => {
@@ -234,9 +728,9 @@ class SineWebPanels {
       return;
     }
 
-    this.#closePanel({ animate: false });
+    this.#closePanel();
     this.#runtime?.destroy();
-    this.#runtime = new WebPanelsRuntime(this.window);
+    this.#runtime = new WebPanelsRuntime(this.window, this.#surface);
     this.#root.setAttribute("disabled", "true");
     this.#resetChromeLayout();
   }
@@ -252,7 +746,6 @@ class SineWebPanels {
     const gap = Number.parseFloat(styles.getPropertyValue("--sine-web-panels-gap")) || 8;
     const reservedSize = `${railSize + gap}px`;
     this.#browserChrome.setAttribute("sine-web-panels-side", side);
-    this.document.documentElement.setAttribute("sine-web-panels-side", side);
     this.#browserChrome.style.setProperty(
       "--sine-web-panels-reserved-inline-size",
       reservedSize
@@ -265,16 +758,18 @@ class SineWebPanels {
       reservedSize,
       "important"
     );
+    this.#observePageViewport();
+    this.#syncPageViewportGeometry();
   }
 
   #resetChromeLayout() {
     this.#browserChrome?.removeAttribute("sine-web-panels-side");
-    this.document?.documentElement?.removeAttribute("sine-web-panels-side");
-    this.document?.documentElement?.style.removeProperty("--sine-web-panels-width");
     this.#browserChrome?.style.removeProperty("--sine-web-panels-reserved-inline-size");
     this.#contentContainer?.style.removeProperty("margin-inline-start");
     this.#contentContainer?.style.removeProperty("margin-inline-end");
     this.#contentContainer = null;
+    this.#pageViewportResizeObserver?.disconnect();
+    this.#pageViewportElement = null;
   }
 
   #findContentContainer() {
@@ -285,6 +780,87 @@ class SineWebPanels {
       this.document.getElementById("appcontent")
     );
   }
+
+  #findPageViewportElement() {
+    const runtimeUserBrowser = this.#runtime?.getUserBrowser?.();
+    if (typeof runtimeUserBrowser?.getBoundingClientRect === "function") {
+      return runtimeUserBrowser;
+    }
+    const gBrowser = this.window.gBrowser;
+    const selectedTab = gBrowser?.selectedTab ?? null;
+    const visibleUserTab = gBrowser?.visibleTabs?.includes(selectedTab)
+      ? selectedTab
+      : gBrowser?.visibleTabs?.find(tab => !tab?.closing) ?? null;
+    if (typeof visibleUserTab?.linkedBrowser?.getBoundingClientRect === "function") {
+      return visibleUserTab.linkedBrowser;
+    }
+    return (
+      this.document.getElementById("zen-tabbox-wrapper") ??
+      this.document.getElementById("tabbrowser-tabbox") ??
+      this.document.getElementById("appcontent") ??
+      this.#contentContainer
+    );
+  }
+
+  #observePageViewport() {
+    const viewportElement = this.#findPageViewportElement();
+    if (viewportElement === this.#pageViewportElement) {
+      return;
+    }
+    this.#pageViewportResizeObserver?.disconnect();
+    this.#pageViewportElement = viewportElement;
+    if (viewportElement) {
+      this.#pageViewportResizeObserver?.observe(viewportElement);
+    }
+    const layoutAnchor = this.document.getElementById("zen-tabbox-wrapper");
+    if (layoutAnchor && layoutAnchor !== viewportElement) {
+      this.#pageViewportResizeObserver?.observe(layoutAnchor);
+    }
+  }
+
+  #pageViewportGeometry() {
+    const fallbackViewport = {
+      top: 0,
+      left: 0,
+      width: this.document.documentElement.clientWidth || this.window.innerWidth,
+      height: this.document.documentElement.clientHeight || this.window.innerHeight,
+    };
+    let rect = null;
+    try {
+      rect = this.#findPageViewportElement()?.getBoundingClientRect?.() ?? null;
+    } catch (error) {
+      console.error("[Web Panels] Could not measure the page viewport.", error);
+    }
+    return calculateWebPanelViewportGeometry(rect, fallbackViewport);
+  }
+
+  #syncPageViewportGeometry() {
+    if (!this.#root || !this.#store.enabled) {
+      return;
+    }
+    const geometry = this.#pageViewportGeometry();
+    this.#root.style.setProperty("--sine-web-panels-viewport-top", `${geometry.top}px`);
+    this.#root.style.setProperty("--sine-web-panels-viewport-height", `${geometry.height}px`);
+    this.#root.style.setProperty("--sine-web-panels-max-width", `${geometry.maxWidth}px`);
+    this.#root.style.setProperty(
+      "--sine-web-panels-width",
+      `${clampWebPanelWidth(this.#store.width, geometry.maxWidth)}px`
+    );
+    this.#runtime?.syncGeometry();
+  }
+
+  #onPageViewportResize = () => {
+    this.#syncPageViewportGeometry();
+  };
+
+  #onPageViewportChange = () => {
+    this.#observePageViewport();
+    this.window.requestAnimationFrame(() => {
+      if (!this.#destroyed) {
+        this.#syncPageViewportGeometry();
+      }
+    });
+  };
 
   #render() {
     if (!this.#list || !this.#store.enabled) {
@@ -305,6 +881,7 @@ class SineWebPanels {
     this.#root.toggleAttribute("has-items", this.#items.length > 0);
     this.#root.setAttribute("side", this.#placementSide());
     this.#syncChromeLayout();
+    this.#runtime?.syncGeometry();
   }
 
   #renderPanelButton(item, index) {
@@ -324,8 +901,11 @@ class SineWebPanels {
       alt: "",
       draggable: "false",
     });
-    const tabIcon = this.#runtime?.get(item.id)?.tab?.getAttribute("image");
-    this.#setFaviconSource(icon, item.url, tabIcon);
+    icon.src = `page-icon:${item.url}`;
+    icon.addEventListener("error", () => {
+      icon.removeAttribute("src");
+      icon.setAttribute("fallback", "true");
+    }, { once: true });
     button.append(icon);
     this.#applyUnreadBadge(button, item.id);
 
@@ -370,33 +950,43 @@ class SineWebPanels {
 
   #openPanel(item) {
     this.#closeEditor();
-    if (this.#closeTimer) {
-      this.window.clearTimeout(this.#closeTimer);
-      this.#closeTimer = null;
+    this.#hideContentContextMenu();
+    const switching = Boolean(this.#activeId);
+    const wasClosing = this.#root.hasAttribute("closing");
+    this.#clearOpenTransitionTimer();
+    if (wasClosing) {
+      this.#root.removeAttribute("closing");
     }
-    const switching = Boolean(this.#activeId && this.#activeId !== item.id);
-    const parentTab = this.#currentVisibleTab() ?? this.#activeParentTab;
-    const panelTab = this.#runtime.ensurePanelTab(item, parentTab);
-    if (!this.#openSurface(parentTab, panelTab)) {
-      console.warn("[Web Panels] Could not attach managed panel tab to a Zen browser surface.");
+    this.#root.toggleAttribute("switching", switching);
+    this.#root.toggleAttribute("opening", !switching);
+    const browser = this.#runtime.attach(item);
+    if (!browser) {
+      this.#root.removeAttribute("switching");
+      this.#root.removeAttribute("opening");
+      if (wasClosing) {
+        this.#root.setAttribute("closing", "true");
+      }
+      console.error("[Web Panels] Could not create the panel browser.", { panelId: item?.id });
       return;
     }
 
+    this.#clearCloseTransitionTimer();
     this.#activeId = item.id;
-    this.#activeParentTab = parentTab;
+    this.#surfaceShell.hidden = false;
     this.#backdrop.hidden = false;
-    this.#resizer.hidden = false;
     this.#root.setAttribute("open", "true");
-    this.#root.toggleAttribute("switching", switching);
-    this.#root.toggleAttribute("opening", !switching);
-    this.#root.removeAttribute("closing");
     this.#root.setAttribute("active", item.id);
-    this.#bindBrowserTitle(item, panelTab.linkedBrowser);
-    this.#syncUnreadFromTab(item.id);
+    this.#bindBrowserTitle(item, browser);
     this.#render();
-    this.window.setTimeout(() => {
+    this.#permissions?.activate({
+      browser,
+      getAnchor: () => this.#findItemElement(item.id),
+    });
+    this.#openTransitionTimer = this.window.setTimeout(() => {
+      this.#openTransitionTimer = null;
       this.#root?.removeAttribute("switching");
       this.#root?.removeAttribute("opening");
+      this.#runtime?.syncGeometry();
     }, 90);
   }
 
@@ -405,165 +995,49 @@ class SineWebPanels {
       return;
     }
 
+    this.#hideContentContextMenu();
+    this.#clearOpenTransitionTimer();
+    this.#clearCloseTransitionTimer();
+    this.#permissions?.deactivate();
+    this.#activeId = null;
     this.#root.removeAttribute("active");
     this.#root.removeAttribute("open");
     this.#root.removeAttribute("opening");
-    if (this.#closeTimer) {
-      this.window.clearTimeout(this.#closeTimer);
-      this.#closeTimer = null;
-    }
-
+    this.#root.removeAttribute("switching");
     if (animate) {
       this.#root.setAttribute("closing", "true");
-      this.#closeTimer = this.window.setTimeout(() => this.#finishClosePanel(), 90);
+      this.#closeTransitionTimer = this.window.setTimeout(() => {
+        this.#closeTransitionTimer = null;
+        if (!this.#activeId) {
+          this.#runtime?.detach();
+          this.#surfaceShell.hidden = true;
+          this.#backdrop.hidden = true;
+          this.#root?.removeAttribute("closing");
+        }
+      }, 90);
     } else {
-      this.#finishClosePanel();
+      this.#runtime?.detach();
+      this.#surfaceShell.hidden = true;
+      this.#backdrop.hidden = true;
+      this.#root.removeAttribute("closing");
     }
-  }
-
-  #finishClosePanel() {
-    this.#closeTimer = null;
-    this.#closeSurface();
-    this.#activeId = null;
-    this.#activeParentTab = null;
-    this.#backdrop.hidden = true;
-    this.#resizer.hidden = true;
-    this.#setResizeHover(false);
-    this.#root.removeAttribute("active");
-    this.#root.removeAttribute("open");
-    this.#root.removeAttribute("opening");
-    this.#root.removeAttribute("closing");
     this.#render();
   }
 
-  #openSurface(parentTab, panelTab) {
-    const parentBrowser = parentTab?.linkedBrowser;
-    const panelBrowser = panelTab?.linkedBrowser;
-    const parentContainer = parentBrowser?.closest(".browserSidebarContainer");
-    const panelContainer = panelBrowser?.closest(".browserSidebarContainer");
-    const panelFrame = panelContainer?.querySelector(".browserContainer");
-    if (!parentBrowser || !panelBrowser || !parentContainer || !panelContainer || !panelFrame) {
-      return false;
-    }
-
-    this.#closeSurface({ selectParent: false });
-    parentContainer.classList.add("sine-web-panels-parent-background");
-    panelContainer.classList.add("deck-selected", "sine-web-panels-overlay");
-    panelFrame.append(this.#resizer);
-    panelBrowser.setAttribute("sine-web-panel-selected", "true");
-    parentBrowser.zenModeActive = true;
-    parentBrowser.docShellIsActive = true;
-    panelBrowser.zenModeActive = true;
-    panelBrowser.docShellIsActive = true;
-    if (this.window.gBrowser?.selectedTab === panelTab && parentTab) {
-      this.window.gBrowser.selectedTab = parentTab;
-    }
-    parentTab._visuallySelected = true;
-    this.#surfaceState = {
-      parentTab,
-      panelTab,
-      parentBrowser,
-      panelBrowser,
-      parentContainer,
-      panelContainer,
-      panelFrame,
-    };
-    return true;
-  }
-
-  #closeSurface({ selectParent = true } = {}) {
-    if (!this.#surfaceState) {
+  #clearOpenTransitionTimer() {
+    if (this.#openTransitionTimer === null) {
       return;
     }
-
-    const { parentTab, panelTab, parentBrowser, panelBrowser, parentContainer, panelContainer } = this.#surfaceState;
-    panelContainer.classList.remove("deck-selected", "sine-web-panels-overlay");
-    parentContainer.classList.remove("sine-web-panels-parent-background");
-    panelBrowser.removeAttribute("sine-web-panel-selected");
-    panelBrowser.zenModeActive = false;
-    panelBrowser.docShellIsActive = false;
-    if (selectParent && parentTab && this.window.gBrowser?.selectedTab === panelTab) {
-      this.window.gBrowser.selectedTab = parentTab;
-    }
-    if (parentBrowser && this.window.gBrowser?.selectedTab !== parentTab) {
-      parentBrowser.zenModeActive = false;
-      parentBrowser.docShellIsActive = false;
-    }
-    if (parentTab) {
-      parentTab._visuallySelected = this.window.gBrowser?.selectedTab === parentTab;
-    }
-    this.#surfaceState = null;
+    this.window.clearTimeout(this.#openTransitionTimer);
+    this.#openTransitionTimer = null;
   }
 
-  #clearOrphanedOverlayState() {
-    this.document
-      .querySelectorAll(".browserSidebarContainer.sine-web-panels-overlay")
-      .forEach(container => container.classList.remove("deck-selected", "sine-web-panels-overlay"));
-    this.document
-      .querySelectorAll(".browserSidebarContainer.sine-web-panels-parent-background")
-      .forEach(container => container.classList.remove("sine-web-panels-parent-background"));
-    this.document
-      .querySelectorAll('browser[sine-web-panel-selected="true"]')
-      .forEach(browser => browser.removeAttribute("sine-web-panel-selected"));
-  }
-
-  #isPointInsideActivePanel(clientX, clientY) {
-    const panelElement = this.#activePanelSurface();
-    if (!panelElement) {
-      return false;
-    }
-
-    const rect = panelElement.getBoundingClientRect();
-    return (
-      clientX >= rect.left &&
-      clientX <= rect.right &&
-      clientY >= rect.top &&
-      clientY <= rect.bottom
-    );
-  }
-
-  #eventIsOnResizeEdge(event) {
-    const panelElement = this.#activePanelSurface();
-    if (!panelElement || this.#resizer?.hidden) {
-      return false;
-    }
-
-    const rect = panelElement.getBoundingClientRect();
-    if (event.clientY < rect.top || event.clientY > rect.bottom) {
-      return false;
-    }
-
-    const hitWidth = this.#resizeHitWidth();
-    if (this.#placementSide() === "right") {
-      return event.clientX < rect.left && event.clientX >= rect.left - hitWidth;
-    }
-
-    return event.clientX > rect.right && event.clientX <= rect.right + hitWidth;
-  }
-
-  #activePanelSurface() {
-    return (
-      this.#surfaceState?.panelBrowser ??
-      this.#surfaceState?.panelContainer?.querySelector(".browserStack") ??
-      this.#surfaceState?.panelContainer?.querySelector(".browserContainer") ??
-      null
-    );
-  }
-
-  #resizeHitWidth() {
-    const styles = this.window.getComputedStyle(this.#root);
-    const width = Number.parseFloat(styles.getPropertyValue("--sine-web-panels-resizer-width"));
-    return Number.isFinite(width) ? width : 8;
-  }
-
-  #setResizeHover(isHovering) {
-    if (this.#resizeHovering === isHovering) {
+  #clearCloseTransitionTimer() {
+    if (this.#closeTransitionTimer === null) {
       return;
     }
-
-    this.#resizeHovering = isHovering;
-    this.document.documentElement.toggleAttribute("sine-web-panels-resizer-hover", isHovering);
-    this.window.setCursor?.(isHovering ? "ew-resize" : "auto");
+    this.window.clearTimeout(this.#closeTransitionTimer);
+    this.#closeTransitionTimer = null;
   }
 
   #bindBrowserTitle(item, browser) {
@@ -572,28 +1046,17 @@ class SineWebPanels {
     }
     browser.setAttribute("sine-web-panels-title-bound", item.id);
     const update = () => {
-      this.#syncUnreadFromTab(item.id);
+      const title = browser.contentTitle || browser.getAttribute("contentTitle") || "";
+      const count = parseWebPanelUnreadCount(title);
+      if (count) {
+        this.#unreadCounts.set(item.id, count);
+      } else {
+        this.#unreadCounts.delete(item.id);
+      }
       this.#render();
     };
     browser.addEventListener("DOMTitleChanged", update, { signal: this.#abortController.signal });
     browser.addEventListener("load", update, { signal: this.#abortController.signal });
-  }
-
-  #syncUnreadFromTab(itemId) {
-    const tab = this.#runtime?.get(itemId)?.tab;
-    const browser = tab?.linkedBrowser;
-    const title =
-      tab?.getAttribute("label") ||
-      browser?.contentTitle ||
-      browser?.getAttribute("contentTitle") ||
-      "";
-    const count = parseWebPanelUnreadCount(title);
-    if (count) {
-      this.#unreadCounts.set(itemId, count);
-      return;
-    }
-
-    this.#unreadCounts.delete(itemId);
   }
 
   #applyUnreadBadge(button, itemId) {
@@ -606,20 +1069,6 @@ class SineWebPanels {
     button.setAttribute("badged", "true");
     button.setAttribute("unread-count", String(count));
     button.append(this.#el("span", { class: "sine-web-panels-badge" }, badge));
-  }
-
-  #setFaviconSource(icon, panelUrl, tabIcon = "") {
-    const fallbackUrl = fallbackFaviconUrl(panelUrl);
-    icon.src = tabIcon || `page-icon:${panelUrl}`;
-    icon.addEventListener("error", () => {
-      if (fallbackUrl && icon.src !== fallbackUrl) {
-        icon.src = fallbackUrl;
-        return;
-      }
-
-      icon.removeAttribute("src");
-      icon.setAttribute("fallback", "true");
-    });
   }
 
   #buildEditor() {
@@ -699,7 +1148,7 @@ class SineWebPanels {
     if (this.#editorState?.mode === "edit") {
       const updated = this.#store.updatePanel(this.#editorState.itemId, url);
       if (updated) {
-        this.#unloadPanel(updated.id);
+        this.#runtime.unload(updated.id);
       }
     } else {
       this.#store.insert(this.#store.createPanel(url), this.#editorState?.insertIndex ?? this.#items.length);
@@ -731,10 +1180,13 @@ class SineWebPanels {
       ? [
           ["Open in New Tab", () => this.#openInNewTab(item.url)],
           ["Edit Web Panel", () => this.#openEditor({ mode: "edit", item, anchor: this.#findItemElement(item.id) })],
+          ["Reset Web Panel", () => this.#resetPanel(item)],
+          ["Replace with Current URL", () => this.#replacePanelUrlWithCurrent(item), !this.#currentPanelUrl(item)],
           ["Move Up", () => this.#moveItem(item.id, index - 1), index <= 0],
           ["Move Down", () => this.#moveItem(item.id, index + 1), index >= this.#items.length - 1],
           ["separator"],
-          ["Unload Web Panel", () => this.#unloadPanel(item.id)],
+          ["Reload Web Panel", () => this.#reloadPanel(item)],
+          ["Unload Web Panel", () => this.#runtime.unload(item.id)],
           ["Delete Web Panel", () => this.#deleteItem(item.id)],
         ]
       : [
@@ -792,18 +1244,77 @@ class SineWebPanels {
   }
 
   #deleteItem(id) {
-    this.#unloadPanel(id);
+    this.#runtime.unload(id);
     this.#store.remove(id);
+    if (this.#activeId === id) {
+      this.#closePanel({ animate: false });
+    }
     this.#unreadCounts.delete(id);
     this.#render();
   }
 
-  #unloadPanel(id) {
-    if (this.#activeId === id) {
-      this.#closePanel({ animate: false });
+  #reloadPanel(item) {
+    const browser = this.#runtime.getBrowser(item);
+    if (typeof browser?.reload !== "function") {
+      console.error("[Web Panels] Could not reload the panel browser.", { panelId: item?.id });
+      return;
     }
-    this.#runtime.unload(id);
-    this.#unreadCounts.delete(id);
+    browser.reload();
+  }
+
+  #resetPanel(item, expectedBrowser = null) {
+    const currentItem = this.#store.items.find(
+      entry => entry.id === item?.id && isPanel(entry)
+    );
+    if (!currentItem) {
+      return false;
+    }
+    const reset = this.#runtime.resetPanel(currentItem, expectedBrowser);
+    if (!reset) {
+      console.error("[Web Panels] Could not reset the panel.", {
+        panelId: currentItem.id,
+      });
+      return false;
+    }
+    this.#unreadCounts.delete(currentItem.id);
+    this.#render();
+    return true;
+  }
+
+  #currentPanelUrl(item) {
+    const browser = this.#runtime?.getBrowser(item);
+    return normalizeWebPanelUrl(browser?.currentURI?.spec);
+  }
+
+  #replacePanelUrlWithCurrent(item) {
+    const currentItem = this.#store.items.find(
+      entry => entry.id === item?.id && isPanel(entry)
+    );
+    const browser = currentItem ? this.#runtime.getBrowser(currentItem) : null;
+    const currentUrl = normalizeWebPanelUrl(browser?.currentURI?.spec);
+    if (!currentItem || !browser || !currentUrl) {
+      console.error("[Web Panels] The current panel URL is unavailable.", {
+        panelId: item?.id,
+      });
+      return false;
+    }
+
+    const updated = this.#store.updatePanel(currentItem.id, currentUrl);
+    if (!updated || !this.#runtime.adoptCurrentUrl(updated, browser)) {
+      if (updated && !this.#store.replacePanel(currentItem)) {
+        console.error("[Web Panels] Could not restore the saved panel metadata.", {
+          panelId: currentItem.id,
+        });
+      }
+      console.error("[Web Panels] Could not replace the saved panel URL.", {
+        panelId: currentItem.id,
+      });
+      return false;
+    }
+
+    this.#unreadCounts.delete(currentItem.id);
+    this.#render();
+    return true;
   }
 
   #moveItem(id, targetIndex) {
@@ -812,7 +1323,7 @@ class SineWebPanels {
   }
 
   #onItemPointerDown(event, item) {
-    if (event.button !== 0) {
+    if (event.button !== 0 || this.#dragState || this.#resizeState) {
       return;
     }
     const target = this.#findItemElement(item.id);
@@ -820,6 +1331,7 @@ class SineWebPanels {
       itemId: item.id,
       startX: event.clientX,
       startY: event.clientY,
+      pointerId: event.pointerId,
       dragging: false,
       target,
     };
@@ -828,13 +1340,14 @@ class SineWebPanels {
 
   #onPointerMove = event => {
     if (this.#resizeState) {
+      if (event.pointerId !== this.#resizeState.pointerId) {
+        return;
+      }
       this.#resize(event);
       return;
     }
 
-    this.#setResizeHover(this.#eventIsOnResizeEdge(event));
-
-    if (!this.#dragState) {
+    if (!this.#dragState || event.pointerId !== this.#dragState.pointerId) {
       return;
     }
 
@@ -851,12 +1364,18 @@ class SineWebPanels {
 
   #onPointerUp = event => {
     if (this.#resizeState) {
+      const resize = this.#resizeState;
+      if (event.pointerId !== resize.pointerId) {
+        return;
+      }
       this.#finishResize();
-      this.#setResizeHover(this.#eventIsOnResizeEdge(event));
+      if (resize.captureTarget?.hasPointerCapture?.(resize.pointerId)) {
+        resize.captureTarget.releasePointerCapture(resize.pointerId);
+      }
       return;
     }
 
-    if (!this.#dragState) {
+    if (!this.#dragState || event.pointerId !== this.#dragState.pointerId) {
       return;
     }
 
@@ -866,7 +1385,7 @@ class SineWebPanels {
     drag.target?.removeAttribute("dragging");
     this.#hideDropIndicator();
 
-    if (drag.dragging) {
+    if (drag.dragging && event.type !== "pointercancel") {
       event.preventDefault();
       this.#store.move(drag.itemId, this.#insertIndexFromY(event.clientY));
       this.#render();
@@ -907,25 +1426,22 @@ class SineWebPanels {
     return this.#items.length;
   }
 
-  #onWindowPointerDown = event => {
-    if (event.button !== 0 || !this.#eventIsOnResizeEdge(event)) {
+  #onResizeStart = event => {
+    if (this.#resizeState || this.#dragState) {
       return;
     }
-
-    this.#onResizeStart(event);
-  };
-
-  #onResizeStart(event) {
-    const panelElement = this.#surfaceState?.panelContainer?.querySelector(".browserContainer");
-    const width = panelElement?.getBoundingClientRect().width ?? this.#store.width;
+    event.preventDefault();
+    const width = this.#surfaceShell.getBoundingClientRect().width;
     this.#resizeState = {
+      captureTarget: event.currentTarget,
+      pointerId: event.pointerId,
       startX: event.clientX,
       startWidth: width,
       side: this.#placementSide(),
     };
-    this.#setResizeHover(true);
+    event.currentTarget.setPointerCapture?.(event.pointerId);
     this.#root.setAttribute("resizing", "true");
-  }
+  };
 
   #resize(event) {
     const delta = this.#resizeState.side === "right"
@@ -933,7 +1449,6 @@ class SineWebPanels {
       : event.clientX - this.#resizeState.startX;
     const width = this.#clampWidth(this.#resizeState.startWidth + delta);
     this.#root.style.setProperty("--sine-web-panels-width", `${width}px`);
-    this.document.documentElement.style.setProperty("--sine-web-panels-width", `${width}px`);
   }
 
   #finishResize() {
@@ -943,28 +1458,17 @@ class SineWebPanels {
     );
     this.#store.width = this.#clampWidth(width);
     this.#root.style.setProperty("--sine-web-panels-width", `${this.#store.width}px`);
-    this.document.documentElement.style.setProperty("--sine-web-panels-width", `${this.#store.width}px`);
+    this.#root.removeAttribute("resizing");
     this.#resizeState = null;
-    this.#ignoreOutsideClicksUntil = this.window.performance.now() + 250;
-    this.window.requestAnimationFrame(() => {
-      this.window.requestAnimationFrame(() => {
-        this.#root?.removeAttribute("resizing");
-      });
-    });
   }
 
   #clampWidth(width) {
-    const railRect = this.#rail.getBoundingClientRect();
-    const gap = Number.parseFloat(this.window.getComputedStyle(this.#root).getPropertyValue("--sine-web-panels-gap")) || 8;
-    const max = Math.max(MIN_PANEL_WIDTH, this.window.innerWidth - railRect.width - gap * 3);
-    return Math.min(max, Math.max(MIN_PANEL_WIDTH, Math.round(width)));
+    return clampWebPanelWidth(width, this.#pageViewportGeometry().maxWidth);
   }
 
   #onWindowResize = () => {
-    const width = this.#clampWidth(this.#store.width);
-    this.#store.width = width;
-    this.#root.style.setProperty("--sine-web-panels-width", `${width}px`);
-    this.document.documentElement.style.setProperty("--sine-web-panels-width", `${width}px`);
+    this.#observePageViewport();
+    this.#syncPageViewportGeometry();
   };
 
   #onDocumentClick = event => {
@@ -978,14 +1482,6 @@ class SineWebPanels {
     if (!event.target.closest(`#${ADD_BUTTON_ID}`)) {
       this.#closeEditor();
     }
-    if (
-      this.#activeId &&
-      this.window.performance.now() >= this.#ignoreOutsideClicksUntil &&
-      !event.target.closest(`#${ROOT_ID}`) &&
-      !this.#isPointInsideActivePanel(event.clientX, event.clientY)
-    ) {
-      this.#closePanel();
-    }
   };
 
   #onKeyDown = event => {
@@ -996,47 +1492,113 @@ class SineWebPanels {
     }
   };
 
-  #onTabSelect = () => {
-    if (!this.#activeId) {
-      return;
-    }
+  #onContentContextMenuShowing = event => {
+    if (event.target === this.#contentContextMenu) {
+      this.#resetContentContextState();
+      const target = this.#activeContentContextTarget(this.window.gContextMenu);
+      if (!target) {
+        return;
+      }
 
-    const selectedTab = this.window.gBrowser?.selectedTab;
-    const panelTab = this.#runtime?.get(this.#activeId)?.tab;
-    if (selectedTab === panelTab && this.#activeParentTab && !this.#activeParentTab.closing) {
-      this.window.gBrowser.selectedTab = this.#activeParentTab;
-      return;
-    }
-
-    if (selectedTab && selectedTab !== this.#activeParentTab && !this.#isPanelTab(selectedTab)) {
-      this.#closePanel({ animate: false });
-    }
-  };
-
-  #onTabClose = event => {
-    const tab = event.target;
-    const panelId = tab?.getAttribute?.("sine-web-panel-id");
-    if (panelId) {
-      this.#runtime?.noteTabClosed(panelId);
-      if (this.#activeId === panelId) {
-        this.#closePanel({ animate: false });
+      const state = {
+        ...target,
+        externalMethodDescriptors: [],
+        itemAttributeSnapshots: [],
+        methodDescriptors: [],
+        restoreNavigation: null,
+      };
+      this.#panelContextState = state;
+      try {
+        state.restoreNavigation = configureWebPanelContextNavigation(
+          this.document,
+          state.browser,
+          state.tab
+        );
+        this.#installPanelContextOverrides(state);
+        this.#contentResetMenuItem?.removeAttribute("hidden");
+      } catch (error) {
+        console.error("[Web Panels] Could not prepare the panel context menu.", error);
+        event.preventDefault();
+        this.#resetContentContextState();
       }
       return;
     }
+  };
 
-    if (tab === this.#activeParentTab) {
-      this.#closePanel({ animate: false });
+  #onContentContextMenuHiding = event => {
+    if (event.target === this.#contentContextMenu) {
+      this.#resetContentContextState();
     }
   };
 
-  #onTabAttrModified = event => {
-    const panelId = event.target?.getAttribute?.("sine-web-panel-id");
-    if (!panelId) {
+  #onContentContextMenuCommand = event => {
+    const commandId = event.target?.id;
+    if (!WEB_PANEL_CONTEXT_NAVIGATION_IDS.includes(commandId)) {
+      return;
+    }
+    const state = this.#panelContextState;
+    if (!state) {
       return;
     }
 
-    this.#syncUnreadFromTab(panelId);
-    this.#render();
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    if (!this.#isContentContextStateValid(state)) {
+      console.warn("[Web Panels] Ignored stale panel context navigation.", {
+        commandId,
+        panelId: state.panelId,
+      });
+      this.#deferContentContextMenuHide();
+      return;
+    }
+
+    try {
+      routeWebPanelNavigationCommand(commandId, {
+        browser: state.browser,
+        tab: state.tab,
+        event,
+        navigationFlags: {
+          none: Ci.nsIWebNavigation.LOAD_FLAGS_NONE,
+          bypassProxy: Ci.nsIWebNavigation.LOAD_FLAGS_BYPASS_PROXY,
+          bypassCache: Ci.nsIWebNavigation.LOAD_FLAGS_BYPASS_CACHE,
+        },
+      });
+    } catch (error) {
+      console.error("[Web Panels] Panel context navigation failed.", {
+        commandId,
+        error,
+        panelId: state.panelId,
+      });
+    } finally {
+      this.#deferContentContextMenuHide();
+    }
+  };
+
+  #onResetPanelFromContentMenu = event => {
+    const state = this.#panelContextState;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    if (!this.#isContentContextStateValid(state)) {
+      console.warn("[Web Panels] Ignored a stale panel reset action.", {
+        panelId: state?.panelId,
+      });
+      this.#deferContentContextMenuHide();
+      return;
+    }
+
+    const item = this.#items.find(
+      entry => entry.id === state.panelId && isPanel(entry)
+    );
+    if (!item) {
+      console.warn("[Web Panels] Ignored a reset for a missing panel.", {
+        panelId: state.panelId,
+      });
+      this.#deferContentContextMenuHide();
+      return;
+    }
+
+    this.#resetPanel(item, state.browser);
+    this.#deferContentContextMenuHide();
   };
 
   #onTabContextMenuShowing = event => {
@@ -1063,7 +1625,10 @@ class SineWebPanels {
   };
 
   #contextTabUrl() {
-    const tab = this.#currentVisibleTab({ preferContext: true });
+    const tab =
+      this.window.TabContextMenu?.contextTab ??
+      this.window.gBrowser?.selectedTab ??
+      null;
     const spec = tab?.linkedBrowser?.currentURI?.spec;
     return normalizeWebPanelUrl(spec);
   }
@@ -1084,39 +1649,33 @@ class SineWebPanels {
   }
 
   #currentTabUrl() {
-    const spec = this.#currentVisibleTab()?.linkedBrowser?.currentURI?.spec;
+    const spec = this.window.gBrowser?.selectedBrowser?.currentURI?.spec;
     return normalizeWebPanelUrl(spec) ? spec : "";
   }
 
-  #currentVisibleTab({ preferContext = false } = {}) {
-    const contextTab = preferContext ? this.window.TabContextMenu?.contextTab : null;
-    const selectedTab = this.window.gBrowser?.selectedTab ?? null;
-    const tab = contextTab ?? selectedTab;
-    if (tab && !this.#isPanelTab(tab)) {
-      return tab;
-    }
-
-    if (this.#activeParentTab && !this.#activeParentTab.closing) {
-      return this.#activeParentTab;
-    }
-
-    return null;
-  }
-
-  #isPanelTab(tab) {
-    return tab?.getAttribute?.("sine-web-panel-tab") === "true";
-  }
-
   #openInNewTab(url) {
-    if (typeof this.window.openTrustedLinkIn === "function") {
-      this.window.openTrustedLinkIn(url, "tab", {
-        triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal(),
-      });
+    const safeUrl = normalizeWebPanelUrl(url);
+    if (!safeUrl) {
       return;
     }
-    this.window.gBrowser?.addTrustedTab?.(url, {
-      triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal(),
-    });
+    let opened = false;
+    if (typeof this.window.openTrustedLinkIn === "function") {
+      this.window.openTrustedLinkIn(safeUrl, "tab", {
+        triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal(),
+      });
+      opened = true;
+    } else {
+      opened = Boolean(
+        this.window.gBrowser?.addTrustedTab?.(safeUrl, {
+          triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal(),
+        })
+      );
+    }
+    if (!opened) {
+      return false;
+    }
+    this.#closePanel({ animate: false });
+    return true;
   }
 
   #findItemElement(id) {
@@ -1159,6 +1718,9 @@ class SineWebPanels {
 
   #setAttributes(element, attrs = {}) {
     for (const [name, value] of Object.entries(attrs)) {
+      if (/^on/i.test(name)) {
+        throw new TypeError(`Event handler attributes are not allowed: ${name}`);
+      }
       if (value === null || value === undefined || value === false) {
         continue;
       }
@@ -1173,11 +1735,23 @@ class SineWebPanels {
   }
 }
 
-const instance = new SineWebPanels(window);
-instance.init();
+if (typeof window !== "undefined") {
+  window[INSTANCE_KEY]?.destroy?.();
+  const instance = new SineWebPanels(window);
+  window[INSTANCE_KEY] = instance;
+  instance.init();
 
-if (typeof window.addUnloadListener === "function") {
-  window.addUnloadListener(() => instance.destroy());
-} else {
-  window.addEventListener("unload", () => instance.destroy(), { once: true });
+  const unload = () => {
+    if (window[INSTANCE_KEY] !== instance) {
+      return;
+    }
+    instance.destroy();
+    delete window[INSTANCE_KEY];
+  };
+
+  if (typeof window.addUnloadListener === "function") {
+    window.addUnloadListener(unload);
+  } else {
+    window.addEventListener("unload", unload, { once: true });
+  }
 }

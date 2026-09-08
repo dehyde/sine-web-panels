@@ -198,6 +198,25 @@ export class WebPanelsStore {
     return nextItems[index];
   }
 
+  replacePanel(item) {
+    const normalizedItem = sanitizeItem(item);
+    if (normalizedItem?.type !== PANEL_TYPE) {
+      return null;
+    }
+
+    const nextItems = this.items;
+    const index = nextItems.findIndex(
+      entry => entry.id === normalizedItem.id && entry.type === PANEL_TYPE
+    );
+    if (index < 0) {
+      return null;
+    }
+
+    nextItems[index] = normalizedItem;
+    this.items = nextItems;
+    return normalizedItem;
+  }
+
   remove(id) {
     const nextItems = this.items.filter(item => item.id !== id);
     this.items = nextItems;

@@ -31,6 +31,23 @@ function checkScript(relativePath) {
   }
 }
 
+function runRegressionTests() {
+  const testPaths = [
+    "scripts/tests/web-panels-css.test.mjs",
+    "scripts/tests/web-panels-permissions.test.mjs",
+    "scripts/tests/web-panels-runtime.test.mjs",
+    "scripts/tests/web-panels-security.test.mjs",
+    "scripts/tests/web-panels-ui.test.mjs",
+  ].map(relativePath => join(root, relativePath));
+  const result = spawnSync(process.execPath, ["--test", ...testPaths], {
+    cwd: root,
+    stdio: "inherit",
+  });
+  if (result.status !== 0) {
+    throw new Error("Web Panels regression tests failed.");
+  }
+}
+
 const theme = readJson(join(root, "theme.json"));
 
 for (const field of ["id", "name", "description", "version", "style", "scripts"]) {
@@ -50,5 +67,7 @@ for (const [scriptPath, config] of Object.entries(theme.scripts)) {
     throw new Error(`${scriptPath} must include chrome://browser/content/browser.xhtml`);
   }
 }
+
+runRegressionTests();
 
 console.log("Sine Web Panels package validation passed.");

@@ -1,35 +1,14 @@
-:root {
-  --sine-web-panels-rail-size: 36px;
-  --sine-web-panels-gap: 6px;
-  --sine-web-panels-visible-rail-size: calc(
-    var(--sine-web-panels-rail-size) + var(--sine-web-panels-gap) * 2
-  );
-  --sine-web-panels-offset: var(--sine-web-panels-visible-rail-size);
-  --sine-web-panels-panel-offset: var(--sine-web-panels-gap);
-  --sine-web-panels-resizer-width: 8px;
-  --sine-web-panels-min-width: 320px;
-  --sine-web-panels-width: 420px;
-  --sine-web-panels-animation-duration: 75ms;
-  --sine-web-panels-surface-strong: color-mix(
-    in srgb,
-    var(--zen-main-browser-background, var(--toolbar-bgcolor, Canvas)) 72%,
-    transparent
-  );
-  --sine-web-panels-border: color-mix(in srgb, currentColor 14%, transparent);
-  --sine-web-panels-radius: var(--zen-native-inner-radius, 12px);
-  --sine-web-panels-shadow: var(
-    --zen-big-shadow,
-    0 16px 42px color-mix(in srgb, black 28%, transparent)
-  );
-}
-
 #sine-web-panels-root {
-  --sine-web-panels-rail-size: 36px;
+  --sine-web-panels-rail-size: 40px;
   --sine-web-panels-button-size: 32px;
   --sine-web-panels-icon-size: 18px;
+  --sine-web-panels-resizer-size: 8px;
   --sine-web-panels-gap: 6px;
   --sine-web-panels-min-width: 320px;
   --sine-web-panels-width: 420px;
+  --sine-web-panels-max-width: 95vw;
+  --sine-web-panels-viewport-top: 8px;
+  --sine-web-panels-viewport-height: calc(100vh - 16px);
   --sine-web-panels-animation-duration: 75ms;
   --sine-web-panels-surface: color-mix(in srgb, var(--toolbar-bgcolor, Canvas) 32%, transparent);
   --sine-web-panels-surface-strong: color-mix(in srgb, var(--toolbar-bgcolor, Canvas) 78%, transparent);
@@ -70,9 +49,8 @@
   );
   --sine-web-panels-shadow: 0 16px 42px color-mix(in srgb, black 28%, transparent);
   color-scheme: light dark;
-  position: fixed;
-  inset-block: var(--sine-web-panels-gap);
-  z-index: 9999;
+  position: static;
+  z-index: auto;
   pointer-events: none;
 }
 
@@ -129,34 +107,60 @@
 }
 
 #sine-web-panels-backdrop {
+  --sine-web-panels-backdrop-hole-left: var(--sine-web-panel-surface-left);
+  --sine-web-panels-backdrop-hole-right: var(--sine-web-panel-surface-right);
   position: fixed;
   inset: 0;
-  z-index: 0;
   background: transparent;
-  pointer-events: none;
+  clip-path: polygon(
+    evenodd,
+    0 0,
+    100% 0,
+    100% 100%,
+    0 100%,
+    0 0,
+    var(--sine-web-panels-backdrop-hole-left) var(--sine-web-panel-surface-top),
+    var(--sine-web-panels-backdrop-hole-left) var(--sine-web-panel-surface-bottom),
+    var(--sine-web-panels-backdrop-hole-right) var(--sine-web-panel-surface-bottom),
+    var(--sine-web-panels-backdrop-hole-right) var(--sine-web-panel-surface-top),
+    var(--sine-web-panels-backdrop-hole-left) var(--sine-web-panel-surface-top)
+  );
+  pointer-events: auto;
+  z-index: 9999;
 }
 
-#sine-web-panels-root[side="right"] #sine-web-panels-backdrop {
-  inset-inline-end: calc(
-    var(--sine-web-panels-panel-offset) + var(--sine-web-panels-width)
-  );
+#sine-web-panels-root[opening][side="right"] #sine-web-panels-backdrop,
+#sine-web-panels-root[closing][side="right"] #sine-web-panels-backdrop {
+  --sine-web-panels-backdrop-hole-right: calc(var(--sine-web-panel-surface-right) + 12px);
 }
 
-#sine-web-panels-root[side="left"] #sine-web-panels-backdrop {
-  inset-inline-start: calc(
-    var(--sine-web-panels-panel-offset) + var(--sine-web-panels-width)
-  );
+#sine-web-panels-root[opening][side="left"] #sine-web-panels-backdrop,
+#sine-web-panels-root[closing][side="left"] #sine-web-panels-backdrop {
+  --sine-web-panels-backdrop-hole-left: calc(var(--sine-web-panel-surface-left) - 12px);
+}
+
+#browser:has(#sine-web-panels-root[opening])
+  #tabbrowser-tabpanels
+  > .browserSidebarContainer.deck-selected:not([sine-web-panel-container="true"]):not(.zen-glance-overlay),
+#browser:has(#sine-web-panels-root[open])
+  #tabbrowser-tabpanels
+  > .browserSidebarContainer.deck-selected:not([sine-web-panel-container="true"]):not(.zen-glance-overlay),
+#browser:has(#sine-web-panels-root[closing])
+  #tabbrowser-tabpanels
+  > .browserSidebarContainer.deck-selected:not([sine-web-panel-container="true"]):not(.zen-glance-overlay) {
+  opacity: 0.3 !important;
 }
 
 #sine-web-panels-backdrop[hidden],
-#sine-web-panels-resizer[hidden],
 #sine-web-panels-editor[hidden],
 #sine-web-panels-menu[hidden] {
   display: none;
 }
 
-tab[sine-web-panel-tab="true"] {
-  display: none !important;
+#sine-web-panels-shell[hidden] {
+  display: flex !important;
+  opacity: 0;
+  pointer-events: none;
 }
 
 #sine-web-panels-rail {
@@ -175,6 +179,7 @@ tab[sine-web-panel-tab="true"] {
   backdrop-filter: none;
   color: var(--toolbar-color, var(--zen-colors-primary, currentColor));
   pointer-events: auto;
+  z-index: 10001;
 }
 
 #sine-web-panels-root[side="right"] #sine-web-panels-rail {
@@ -309,144 +314,251 @@ tab[sine-web-panel-tab="true"] {
   pointer-events: none;
 }
 
-#sine-web-panels-resizer {
-  position: absolute;
-  inset-block: 0;
-  width: var(--sine-web-panels-resizer-width);
-  z-index: 2147483647;
-  cursor: ew-resize;
+#sine-web-panels-shell {
+  box-sizing: border-box;
+  position: fixed;
+  top: var(--sine-web-panels-viewport-top);
+  height: var(--sine-web-panels-viewport-height);
+  width: var(--sine-web-panels-width);
+  min-width: min(var(--sine-web-panels-min-width), var(--sine-web-panels-max-width));
+  max-width: var(--sine-web-panels-max-width);
+  display: flex;
+  border: 1px solid var(--sine-web-panels-border);
+  border-radius: 14px;
+  overflow: hidden;
   background: transparent;
+  box-shadow: var(--sine-web-panels-shadow);
+  backdrop-filter: none;
   pointer-events: none;
-  transform: translateX(-50%);
+  z-index: 9999;
 }
 
-#sine-web-panels-resizer::before {
+#sine-web-panels-shell::before {
   content: "";
   position: absolute;
-  top: 50%;
-  width: 2px;
-  height: 50px;
-  border-radius: 2px;
-  background: color-mix(in srgb, AccentColor 75%, transparent);
-  opacity: 0;
+  inset-block: 0;
+  inset-inline: 1px;
+  border-radius: 13px;
+  background: var(--sine-web-panels-surface-strong);
+  backdrop-filter: blur(20px) saturate(130%);
+  clip-path: polygon(
+    0 0,
+    var(--sine-web-panels-resizer-size) 0,
+    var(--sine-web-panels-resizer-size) 100%,
+    0 100%
+  );
   pointer-events: none;
-  transform: translateY(-50%);
-  transition: opacity 80ms ease-in-out;
+  z-index: 0;
 }
 
-:root[sine-web-panels-side="right"] #sine-web-panels-resizer {
-  left: 0;
-  right: auto;
-  transform: translateX(-100%);
+#sine-web-panels-root[side="right"] #sine-web-panels-shell {
+  inset-inline-end: calc(var(--sine-web-panels-rail-size) + var(--sine-web-panels-gap) * 2);
 }
 
-:root[sine-web-panels-side="right"] #sine-web-panels-resizer::before {
-  left: 100%;
+#sine-web-panels-root[side="left"] #sine-web-panels-shell {
+  inset-inline-start: calc(var(--sine-web-panels-rail-size) + var(--sine-web-panels-gap) * 2);
 }
 
-:root[sine-web-panels-side="left"] #sine-web-panels-resizer {
-  left: 100%;
-  right: auto;
-  transform: none;
-}
-
-:root[sine-web-panels-side="left"] #sine-web-panels-resizer::before {
-  left: 0;
-}
-
-#sine-web-panels-resizer:hover,
-:root:has(#sine-web-panels-root[resizing]) #sine-web-panels-resizer {
-  background: transparent;
-}
-
-#sine-web-panels-resizer:hover::before,
-:root[sine-web-panels-resizer-hover="true"] #sine-web-panels-resizer::before,
-:root:has(#sine-web-panels-root[resizing]) #sine-web-panels-resizer::before {
-  opacity: 1;
-}
-
-.browserSidebarContainer.sine-web-panels-parent-background {
-  box-shadow: none !important;
-}
-
-.browserSidebarContainer.sine-web-panels-overlay {
-  overflow: visible !important;
-  visibility: inherit !important;
-  z-index: 10000 !important;
-  pointer-events: none;
-  box-shadow: none !important;
-}
-
-.browserSidebarContainer.sine-web-panels-overlay .browserContainer {
-  box-sizing: border-box;
-  position: fixed !important;
-  inset-block: var(--sine-web-panels-gap) !important;
-  width: max(var(--sine-web-panels-min-width), var(--sine-web-panels-width)) !important;
-  min-width: var(--sine-web-panels-min-width) !important;
-  border: 0;
-  border-radius: 0;
-  overflow: visible;
-  background: transparent;
-  box-shadow: none;
-  backdrop-filter: none;
-  pointer-events: auto;
-}
-
-:root[sine-web-panels-side="right"] .browserSidebarContainer.sine-web-panels-overlay .browserContainer {
-  inset-inline-end: var(--sine-web-panels-panel-offset) !important;
-}
-
-:root[sine-web-panels-side="left"] .browserSidebarContainer.sine-web-panels-overlay .browserContainer {
-  inset-inline-start: var(--sine-web-panels-panel-offset) !important;
-}
-
-#sine-web-panels-root[opening][side="right"] ~ .browserSidebarContainer.sine-web-panels-overlay .browserContainer,
-:root:has(#sine-web-panels-root[opening][side="right"]) .browserSidebarContainer.sine-web-panels-overlay .browserContainer {
+#sine-web-panels-root[opening][side="right"] #sine-web-panels-shell {
   animation: sine-web-panels-open-right var(--sine-web-panels-animation-duration) ease-out;
 }
 
-#sine-web-panels-root[opening][side="left"] ~ .browserSidebarContainer.sine-web-panels-overlay .browserContainer,
-:root:has(#sine-web-panels-root[opening][side="left"]) .browserSidebarContainer.sine-web-panels-overlay .browserContainer {
+#sine-web-panels-root[opening][side="left"] #sine-web-panels-shell {
   animation: sine-web-panels-open-left var(--sine-web-panels-animation-duration) ease-out;
 }
 
-#sine-web-panels-root[switching] ~ .browserSidebarContainer.sine-web-panels-overlay .browserContainer,
-#sine-web-panels-root[resizing] ~ .browserSidebarContainer.sine-web-panels-overlay .browserContainer,
-:root:has(#sine-web-panels-root[switching]) .browserSidebarContainer.sine-web-panels-overlay .browserContainer,
-:root:has(#sine-web-panels-root[resizing]) .browserSidebarContainer.sine-web-panels-overlay .browserContainer {
+#sine-web-panels-root[switching] #sine-web-panels-shell,
+#sine-web-panels-root[resizing] #sine-web-panels-shell {
   animation: none;
 }
 
-:root:has(#sine-web-panels-root[closing][side="right"]) .browserSidebarContainer.sine-web-panels-overlay .browserContainer {
+#sine-web-panels-root[closing][side="right"] #sine-web-panels-shell {
   animation: sine-web-panels-close-right var(--sine-web-panels-animation-duration) ease-in forwards;
 }
 
-:root:has(#sine-web-panels-root[closing][side="left"]) .browserSidebarContainer.sine-web-panels-overlay .browserContainer {
+#sine-web-panels-root[closing][side="left"] #sine-web-panels-shell {
   animation: sine-web-panels-close-left var(--sine-web-panels-animation-duration) ease-in forwards;
 }
 
-:root:has(#sine-web-panels-root[resizing]) .browserSidebarContainer.sine-web-panels-overlay browser {
+#sine-web-panels-resizer {
+  position: relative;
+  width: var(--sine-web-panels-resizer-size);
+  min-width: var(--sine-web-panels-resizer-size);
+  align-self: stretch;
+  cursor: ew-resize;
+  background: transparent;
+  pointer-events: auto;
+  z-index: 1;
+}
+
+#sine-web-panels-resizer:hover,
+#sine-web-panels-root[resizing] #sine-web-panels-resizer {
+  background: color-mix(in srgb, AccentColor 35%, transparent);
+}
+
+#sine-web-panels-surface {
+  min-width: 0;
+  flex: 1;
+  display: grid;
+  background: transparent;
   pointer-events: none;
 }
 
-.browserSidebarContainer.sine-web-panels-overlay .browserStack,
-.browserSidebarContainer.sine-web-panels-overlay browser {
-  width: 100% !important;
-  height: 100% !important;
+.sine-web-panels-browser {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+#browser:has(#sine-web-panels-root[open])
+  .sine-web-panels-browser[sine-web-panel-active],
+#browser:has(#sine-web-panels-root[closing])
+  .sine-web-panels-browser[sine-web-panel-active] {
+  visibility: visible;
+}
+
+#browser:has(#sine-web-panels-root[open])
+  .sine-web-panels-browser[sine-web-panel-active] {
+  pointer-events: auto;
+}
+
+.browserSidebarContainer[sine-web-panel-container="true"] {
+  visibility: hidden !important;
+  pointer-events: none;
+  box-shadow: none !important;
+}
+
+#tabbrowser-tabpanels
+  > .browserSidebarContainer[sine-web-panel-container="true"].sine-web-panel-native-overlay {
+  -moz-subtree-hidden-only-visually: 0 !important;
+  animation: none !important;
+  clip-path: inset(
+    var(--sine-web-panel-native-clip-top)
+    var(--sine-web-panel-native-clip-right)
+    var(--sine-web-panel-native-clip-bottom)
+    var(--sine-web-panel-native-clip-left)
+  ) !important;
+  filter: none !important;
+  opacity: 1 !important;
+  overflow: visible !important;
+  pointer-events: auto !important;
+  rotate: none !important;
+  scale: 1 !important;
+  transform: none !important;
+  transition: none !important;
+  translate: none !important;
+  will-change: auto !important;
+  z-index: 10000 !important;
+}
+
+#browser:has(#sine-web-panels-root[opening][side="right"])
+  #tabbrowser-tabpanels
+  > .browserSidebarContainer[sine-web-panel-container="true"].sine-web-panel-native-overlay,
+#browser:has(#sine-web-panels-root[closing][side="right"])
+  #tabbrowser-tabpanels
+  > .browserSidebarContainer[sine-web-panel-container="true"].sine-web-panel-native-overlay {
+  clip-path: inset(
+    var(--sine-web-panel-native-clip-top)
+    calc(var(--sine-web-panel-native-clip-right) - 12px)
+    var(--sine-web-panel-native-clip-bottom)
+    var(--sine-web-panel-native-clip-left)
+  ) !important;
+}
+
+#browser:has(#sine-web-panels-root[opening][side="left"])
+  #tabbrowser-tabpanels
+  > .browserSidebarContainer[sine-web-panel-container="true"].sine-web-panel-native-overlay,
+#browser:has(#sine-web-panels-root[closing][side="left"])
+  #tabbrowser-tabpanels
+  > .browserSidebarContainer[sine-web-panel-container="true"].sine-web-panel-native-overlay {
+  clip-path: inset(
+    var(--sine-web-panel-native-clip-top)
+    var(--sine-web-panel-native-clip-right)
+    var(--sine-web-panel-native-clip-bottom)
+    calc(var(--sine-web-panel-native-clip-left) - 12px)
+  ) !important;
+}
+
+#browser:has(#sine-web-panels-root[open])
+  .browserSidebarContainer.sine-web-panel-native-overlay,
+#browser:has(#sine-web-panels-root[closing])
+  .browserSidebarContainer.sine-web-panel-native-overlay {
+  visibility: inherit !important;
+}
+
+.browserSidebarContainer.sine-web-panel-native-overlay .browserContainer {
+  box-sizing: border-box;
+  position: fixed !important;
+  top: var(--sine-web-panel-native-top) !important;
+  left: var(--sine-web-panel-native-left) !important;
+  width: var(--sine-web-panel-native-width) !important;
+  height: var(--sine-web-panel-native-height) !important;
   min-width: 0 !important;
   min-height: 0 !important;
+  margin: 0 !important;
+  background: color-mix(in srgb, var(--toolbar-bgcolor, Canvas) 78%, transparent) !important;
+  border-radius: 0 13px 13px 0;
+  flex: none !important;
+  pointer-events: none !important;
 }
 
-.browserSidebarContainer.sine-web-panels-overlay .browserStack {
-  border-radius: var(--sine-web-panels-radius);
+#browser:has(#sine-web-panels-root[open])
+  .browserSidebarContainer.sine-web-panel-native-overlay
+  .browserContainer {
+  pointer-events: auto !important;
+}
+
+#browser:has(#sine-web-panels-root[resizing])
+  .browserSidebarContainer.sine-web-panel-native-overlay
+  .browserContainer {
+  pointer-events: none !important;
+}
+
+.browserSidebarContainer.sine-web-panel-native-overlay .browserStack {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
   overflow: hidden;
-  background-color: var(--sine-web-panels-surface-strong);
-  backdrop-filter: blur(24px) saturate(1.2) brightness(1.08);
-  box-shadow: var(--sine-web-panels-shadow);
+  background: Canvas;
+  border-radius: 0 13px 13px 0;
+  box-shadow: none !important;
 }
 
-.browserSidebarContainer.sine-web-panels-overlay browser {
-  background: transparent !important;
+#browser:has(#sine-web-panels-root[opening][side="right"])
+  .browserSidebarContainer.sine-web-panel-native-overlay
+  .browserContainer {
+  animation: sine-web-panels-open-right var(--sine-web-panels-animation-duration, 75ms) ease-out;
+}
+
+#browser:has(#sine-web-panels-root[opening][side="left"])
+  .browserSidebarContainer.sine-web-panel-native-overlay
+  .browserContainer {
+  animation: sine-web-panels-open-left var(--sine-web-panels-animation-duration, 75ms) ease-out;
+}
+
+#browser:has(#sine-web-panels-root[switching])
+  .browserSidebarContainer.sine-web-panel-native-overlay
+  .browserContainer,
+#browser:has(#sine-web-panels-root[resizing])
+  .browserSidebarContainer.sine-web-panel-native-overlay
+  .browserContainer {
+  animation: none;
+}
+
+#browser:has(#sine-web-panels-root[closing][side="right"])
+  .browserSidebarContainer.sine-web-panel-native-overlay
+  .browserContainer {
+  animation: sine-web-panels-close-right var(--sine-web-panels-animation-duration, 75ms) ease-in forwards;
+}
+
+#browser:has(#sine-web-panels-root[closing][side="left"])
+  .browserSidebarContainer.sine-web-panel-native-overlay
+  .browserContainer {
+  animation: sine-web-panels-close-left var(--sine-web-panels-animation-duration, 75ms) ease-in forwards;
 }
 
 #sine-web-panels-editor {
@@ -617,7 +729,8 @@ tab[sine-web-panel-tab="true"] {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .browserSidebarContainer.sine-web-panels-overlay .browserContainer {
+  #sine-web-panels-shell,
+  .browserSidebarContainer.sine-web-panel-native-overlay .browserContainer {
     animation: none !important;
   }
 }
