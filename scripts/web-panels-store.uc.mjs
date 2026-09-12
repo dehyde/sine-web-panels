@@ -15,6 +15,11 @@ export const DEFAULT_PANEL_WIDTH = 420;
 // the measuring is the caller's job.
 export const PANEL_VIEWPORT_INSET = 8;
 export const PANEL_VIEWPORT_MAX_WIDTH_RATIO = 0.95;
+// The navigation controls sit just outside the panel frame. Reserve their
+// whole footprint while clamping so a narrow panel cannot push them into
+// Zen's sidebar. This stays deliberately in sync with the 28px control plus
+// the 12px resizer/gutter lane in the stylesheet.
+export const PANEL_CONTROL_LANE = 40;
 
 function positiveNumber(value, fallback) {
   return typeof value === "number" && Number.isFinite(value) && value > 0
@@ -49,10 +54,16 @@ export function calculateWebPanelViewportGeometry(rect, fallbackViewport = {}) {
   const visibleHeight = Math.max(0, visibleBottom - visibleTop);
   const visibleWidth = Math.max(0, visibleRight - visibleLeft);
 
+  const unreservedMaxWidth = Math.max(1, Math.floor(visibleWidth * PANEL_VIEWPORT_MAX_WIDTH_RATIO));
+
   return {
     top: visibleTop + PANEL_VIEWPORT_INSET,
     height: Math.max(0, visibleHeight - PANEL_VIEWPORT_INSET * 2),
-    maxWidth: Math.max(1, Math.floor(visibleWidth * PANEL_VIEWPORT_MAX_WIDTH_RATIO)),
+    // The page's visible width bounds the panel itself, but the controls also
+    // occupy a lane on the page side of the frame. Clamping only the panel
+    // here would still let that lane cover Zen's sidebar in a narrow window.
+    maxWidth: Math.max(1, unreservedMaxWidth - PANEL_CONTROL_LANE),
+    unreservedMaxWidth,
   };
 }
 
@@ -68,8 +79,11 @@ export function panelMaxWidthFromViewport(rect, fallbackViewport, minWidth = MIN
     return null;
   }
 
-  const { maxWidth } = calculateWebPanelViewportGeometry(rect, fallbackViewport);
-  return maxWidth >= minWidth ? maxWidth : null;
+  const { maxWidth, unreservedMaxWidth } = calculateWebPanelViewportGeometry(rect, fallbackViewport);
+  // Validate the measurement before accounting for the control lane. A real
+  // 400px page may sensibly leave 340px for the panel, while a 100px rect is
+  // still a bad measurement and must not freeze the resizer.
+  return unreservedMaxWidth >= minWidth ? maxWidth : null;
 }
 
 // The minimum yields to the maximum: on a window too narrow for MIN_PANEL_WIDTH

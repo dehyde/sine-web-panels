@@ -18,11 +18,14 @@
   --sine-web-panels-offset: var(--sine-web-panels-visible-rail-size);
   --sine-web-panels-panel-offset: var(--sine-web-panels-gap);
   --sine-web-panels-resizer-width: 8px;
-  /* The visible mark on the handle. Half again as wide once it is live, so
-     "you can grab this" is legible at a glance rather than on inspection. */
-  --sine-web-panels-resizer-line: 2px;
-  --sine-web-panels-resizer-line-active: 3px;
-  --sine-web-panels-resizer-line-dragging: 4px;
+  /* The hit area remains generous; the visible cue is intentionally quiet. */
+  --sine-web-panels-resizer-line: 1px;
+  --sine-web-panels-resizer-line-active: 1px;
+  --sine-web-panels-resizer-line-dragging: 2px;
+  --sine-web-panels-resizer-edge-inset: 24px;
+  --sine-web-panels-nav-button-size: 28px;
+  /* 28px button plus the 8px resize handle and a 4px breathing gap. */
+  --sine-web-panels-navigation-lane: 40px;
   /* The strip a collapsed rail listens on. Kept narrow: it sits over the page,
      so every pixel of it is a pixel of scrollbar the page does not get. */
   --sine-web-panels-edge-size: 6px;
@@ -35,15 +38,11 @@
     transparent
   );
   --sine-web-panels-border: color-mix(in srgb, currentColor 14%, transparent);
-  /* The resize handle's colour. Follows Zen's theme where Zen exposes it, then
-     the browser theme, then the system — an invisible handle is the whole bug
-     this exists to fix, so the chain must not be able to end in nothing. */
+  /* Default to Zen's ordinary chrome colour, not its chosen primary accent.
+     A person's existing custom resize-colour setting still overrides this. */
   --sine-web-panels-accent: var(
-    --zen-primary-color,
-    var(
-      --zen-colors-primary,
-      var(--toolbarbutton-icon-fill-attention, var(--focus-outline-color, AccentColor))
-    )
+    --toolbarbutton-icon-fill,
+    color-mix(in srgb, currentColor 44%, transparent)
   );
   --sine-web-panels-radius: var(--zen-native-inner-radius, 12px);
   --sine-web-panels-shadow: var(
@@ -169,7 +168,9 @@
   position: fixed;
   inset: 0;
   z-index: 0;
-  background: transparent;
+  /* A small dim makes the panel read as the active surface without making the
+     panel itself translucent or preventing the page behind it from working. */
+  background: color-mix(in srgb, black 14%, transparent);
   pointer-events: none;
 }
 
@@ -301,7 +302,7 @@ tab[sine-web-panel-tab="true"] {
   align-items: center;
   justify-content: center;
   border: 0;
-  border-radius: var(--toolbarbutton-border-radius, 8px);
+  border-radius: var(--toolbarbutton-border-radius, var(--zen-native-inner-radius, 8px));
   margin: 0;
   padding: 0;
   color: var(--toolbarbutton-icon-fill, inherit);
@@ -446,22 +447,21 @@ tab[sine-web-panel-tab="true"] {
   transform: translateX(-50%);
 }
 
-/* The line itself: full height, so the edge of the panel lights up rather than
-   a stub in the middle of it. */
+/* The hit target stays full-height, but the visible cue does not run from one
+   edge of the window to the other. */
 #sine-web-panels-resizer::before {
   content: "";
   position: absolute;
-  inset-block: 0;
+  inset-block: var(--sine-web-panels-resizer-edge-inset);
   width: var(--sine-web-panels-resizer-line);
   border-radius: var(--sine-web-panels-resizer-line);
   background: var(--sine-web-panels-accent);
-  box-shadow: 0 0 6px color-mix(in srgb, var(--sine-web-panels-accent) 65%, transparent);
+  box-shadow: none;
   opacity: 0;
   pointer-events: none;
   transition:
     opacity 80ms ease-in-out,
-    width 80ms ease-in-out,
-    box-shadow 80ms ease-in-out;
+    width 80ms ease-in-out;
 }
 
 :root[sine-web-panels-side="right"] #sine-web-panels-resizer {
@@ -495,14 +495,12 @@ tab[sine-web-panel-tab="true"] {
   width: var(--sine-web-panels-resizer-line-active);
   border-radius: var(--sine-web-panels-resizer-line-active);
   opacity: 1;
-  box-shadow: 0 0 10px color-mix(in srgb, var(--sine-web-panels-accent) 75%, transparent);
 }
 
 /* Grabbed, not just pointed at. */
 :root:has(#sine-web-panels-root[resizing]) #sine-web-panels-resizer::before {
   width: var(--sine-web-panels-resizer-line-dragging);
   border-radius: var(--sine-web-panels-resizer-line-dragging);
-  box-shadow: 0 0 14px color-mix(in srgb, var(--sine-web-panels-accent) 85%, transparent);
 }
 
 .browserSidebarContainer.sine-web-panels-parent-background {
@@ -813,8 +811,9 @@ tab[sine-web-panel-tab="true"] {
 
 /* --------------------------------------------------------------------------
    Panel navigation controls
-   A small pill floating just outside the panel's outer edge, past the resize
-   handle, so it never sits over the panel's content or over Zen's toolbar.
+   Individual Zen-themed round buttons float just outside the panel's outer
+   edge, past the resize handle, so they never sit over panel content or Zen's
+   toolbar.
    Always shown while a panel is open: controls that come and go are harder
    to trust than ones that stay put. It is positioned off the panel frame, so
    it rides the edge during a resize instead of lagging behind it.
@@ -825,22 +824,25 @@ tab[sine-web-panel-tab="true"] {
   z-index: 3;
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  padding: 3px;
-  border-radius: 9px;
-  background: var(--zen-themed-toolbar-bg, Field);
-  color: FieldText;
-  border: 1px solid color-mix(in srgb, currentColor 14%, transparent);
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.28);
+  gap: 6px;
+  padding: 0;
+  background: transparent;
+  color: var(--toolbarbutton-icon-fill, FieldText);
+  border: 0;
+  box-shadow: none;
   pointer-events: auto;
 }
 
 :root[sine-web-panels-side="right"] .sine-web-panels-nav {
-  inset-inline-end: calc(100% + var(--sine-web-panels-resizer-width) + 4px);
+  inset-inline-end: calc(
+    100% + var(--sine-web-panels-navigation-lane) - var(--sine-web-panels-nav-button-size)
+  );
 }
 
 :root[sine-web-panels-side="left"] .sine-web-panels-nav {
-  inset-inline-start: calc(100% + var(--sine-web-panels-resizer-width) + 4px);
+  inset-inline-start: calc(
+    100% + var(--sine-web-panels-navigation-lane) - var(--sine-web-panels-nav-button-size)
+  );
 }
 
 /* The panel owns the whole window while a video from it is fullscreen; there
@@ -850,19 +852,20 @@ tab[sine-web-panel-tab="true"] {
 }
 
 .sine-web-panels-nav-button {
-  width: 26px;
-  height: 26px;
+  width: var(--sine-web-panels-nav-button-size);
+  height: var(--sine-web-panels-nav-button-size);
   padding: 0;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: inherit;
+  border: 1px solid color-mix(in srgb, currentColor 14%, transparent);
+  border-radius: 999px;
+  background: var(--zen-themed-toolbar-bg, var(--toolbar-bgcolor, Field));
+  color: var(--toolbarbutton-icon-fill, inherit);
   display: flex;
   align-items: center;
   justify-content: center;
   font-size: 0;
-  opacity: 0.8;
+  opacity: 1;
   -moz-context-properties: fill;
+  box-shadow: 0 2px 8px color-mix(in srgb, black 18%, transparent);
 }
 
 /* The icon goes on ::before, matching #sine-web-panels-add-button: a chrome
@@ -877,7 +880,6 @@ tab[sine-web-panel-tab="true"] {
 
 .sine-web-panels-nav-button:hover:not(:disabled) {
   background: var(--sine-web-panels-hover);
-  opacity: 1;
 }
 
 .sine-web-panels-nav-button:disabled {
@@ -1031,4 +1033,3 @@ tab[sine-web-panel-tab="true"] {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-
