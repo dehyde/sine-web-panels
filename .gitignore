@@ -2,3 +2,7 @@
 *.zip
 dist/
 node_modules/
+
+# patch(1) leftovers
+*.orig
+*.rej

@@ -1,4 +1,15 @@
 :root {
+  /* Every popup of ours (menu, finder, Add/Edit) paints on this. Opaque on
+     purpose: Zen's own arrow panels follow its translucent primary colour and
+     the page read through the fields. --zen-dialog-background is the solid
+     Zen uses for its dialogs; the fallback matches its values.
+     On :root, not on the rail: the Add/Edit panel hangs off mainPopupSet and
+     inherits nothing from #sine-web-panels-root — a token defined there is
+     invalid inside the popup, and an invalid background paints transparent. */
+  --sine-web-panels-opaque-surface: var(
+    --zen-dialog-background,
+    light-dark(rgb(250, 251, 255), rgb(28, 28, 28))
+  );
   --sine-web-panels-rail-size: 36px;
   --sine-web-panels-gap: 6px;
   --sine-web-panels-visible-rail-size: calc(
@@ -7,6 +18,14 @@
   --sine-web-panels-offset: var(--sine-web-panels-visible-rail-size);
   --sine-web-panels-panel-offset: var(--sine-web-panels-gap);
   --sine-web-panels-resizer-width: 8px;
+  /* The visible mark on the handle. Half again as wide once it is live, so
+     "you can grab this" is legible at a glance rather than on inspection. */
+  --sine-web-panels-resizer-line: 2px;
+  --sine-web-panels-resizer-line-active: 3px;
+  --sine-web-panels-resizer-line-dragging: 4px;
+  /* The strip a collapsed rail listens on. Kept narrow: it sits over the page,
+     so every pixel of it is a pixel of scrollbar the page does not get. */
+  --sine-web-panels-edge-size: 6px;
   --sine-web-panels-min-width: 320px;
   --sine-web-panels-width: 420px;
   --sine-web-panels-animation-duration: 75ms;
@@ -16,6 +35,16 @@
     transparent
   );
   --sine-web-panels-border: color-mix(in srgb, currentColor 14%, transparent);
+  /* The resize handle's colour. Follows Zen's theme where Zen exposes it, then
+     the browser theme, then the system — an invisible handle is the whole bug
+     this exists to fix, so the chain must not be able to end in nothing. */
+  --sine-web-panels-accent: var(
+    --zen-primary-color,
+    var(
+      --zen-colors-primary,
+      var(--toolbarbutton-icon-fill-attention, var(--focus-outline-color, AccentColor))
+    )
+  );
   --sine-web-panels-radius: var(--zen-native-inner-radius, 12px);
   --sine-web-panels-shadow: var(
     --zen-big-shadow,
@@ -124,8 +153,16 @@
   inset-inline-start: var(--sine-web-panels-gap);
 }
 
-#sine-web-panels-root[disabled] {
+#sine-web-panels-root[disabled],
+/* Fullscreen belongs to the page. The script drops the reserved margin (it is
+   an inline !important, unreachable from here) and sets this attribute. */
+#sine-web-panels-root[fullscreen] {
   display: none;
+}
+
+:root[inFullscreen] #sine-web-panels-resizer,
+:root[inDOMFullscreen] #sine-web-panels-resizer {
+  display: none !important;
 }
 
 #sine-web-panels-backdrop {
@@ -149,6 +186,7 @@
 }
 
 #sine-web-panels-backdrop[hidden],
+#sine-web-panels-edge[hidden],
 #sine-web-panels-resizer[hidden],
 #sine-web-panels-editor[hidden],
 #sine-web-panels-menu[hidden] {
@@ -185,6 +223,59 @@ tab[sine-web-panel-tab="true"] {
   inset-inline-start: var(--sine-web-panels-gap);
 }
 
+/* --------------------------------------------------------------------------
+   Collapsed rail + edge peek. Collapsed, the rail slides off its own side and
+   the script hands the reserved strip back to the content; the edge element
+   below is what the pointer has to reach to bring it in again.
+   -------------------------------------------------------------------------- */
+#sine-web-panels-rail {
+  transition:
+    translate var(--sine-web-panels-animation-duration) ease-out,
+    opacity var(--sine-web-panels-animation-duration) ease-out;
+}
+
+#sine-web-panels-root[collapsed] #sine-web-panels-rail {
+  opacity: 0;
+  pointer-events: none;
+}
+
+#sine-web-panels-root[collapsed][side="right"] #sine-web-panels-rail {
+  translate: var(--sine-web-panels-visible-rail-size) 0;
+}
+
+#sine-web-panels-root[collapsed][side="left"] #sine-web-panels-rail {
+  translate: calc(-1 * var(--sine-web-panels-visible-rail-size)) 0;
+}
+
+#sine-web-panels-root[collapsed][peeking] #sine-web-panels-rail {
+  translate: 0 0;
+  opacity: 1;
+  pointer-events: auto;
+  /* Peeked, the rail floats over the page rather than over chrome, so it needs
+     a surface of its own. Opaque, not translucent: the mod refuses blur
+     everywhere else, and a see-through rail over arbitrary content is a
+     coin toss on legibility. */
+  border-radius: var(--sine-web-panels-radius);
+  background: var(--sine-web-panels-panel-base);
+  box-shadow: var(--sine-web-panels-shadow);
+}
+
+#sine-web-panels-edge {
+  position: fixed;
+  inset-block: 0;
+  width: var(--sine-web-panels-edge-size);
+  background: transparent;
+  pointer-events: auto;
+}
+
+#sine-web-panels-root[side="right"] #sine-web-panels-edge {
+  inset-inline-end: 0;
+}
+
+#sine-web-panels-root[side="left"] #sine-web-panels-edge {
+  inset-inline-start: 0;
+}
+
 #sine-web-panels-list {
   width: 100%;
   min-height: 0;
@@ -198,7 +289,8 @@ tab[sine-web-panel-tab="true"] {
 }
 
 .sine-web-panels-item,
-#sine-web-panels-add-button {
+#sine-web-panels-add-button,
+#sine-web-panels-toggle {
   appearance: none;
   box-sizing: border-box;
   width: var(--sine-web-panels-button-size);
@@ -220,10 +312,37 @@ tab[sine-web-panel-tab="true"] {
   pointer-events: auto;
 }
 
-#sine-web-panels-add-button {
+#sine-web-panels-add-button,
+#sine-web-panels-toggle {
   font-size: 0;
   font-weight: 400;
   -moz-context-properties: fill;
+}
+
+/* The two-pane glyph Zen uses for its own sidebar button, mirrored to whichever
+   side the rail is on so the icon points at the edge it hides behind. Sits a
+   step back from the panels themselves — it is chrome for the rail, not one of
+   the things on it. */
+#sine-web-panels-toggle {
+  opacity: 0.7;
+}
+
+#sine-web-panels-toggle:hover,
+#sine-web-panels-root[collapsed] #sine-web-panels-toggle {
+  opacity: 1;
+}
+
+#sine-web-panels-toggle::before {
+  content: "";
+  width: 16px;
+  height: 16px;
+  display: block;
+  background-color: currentColor;
+  mask: url("chrome://browser/skin/zen-icons/sidebar.svg") center / 16px 16px no-repeat;
+}
+
+#sine-web-panels-root[side="right"] #sine-web-panels-toggle::before {
+  mask-image: url("chrome://browser/skin/zen-icons/sidebar-right.svg");
 }
 
 #sine-web-panels-add-button::before {
@@ -236,13 +355,15 @@ tab[sine-web-panel-tab="true"] {
 }
 
 .sine-web-panels-panel-button:hover,
-#sine-web-panels-add-button:hover {
+#sine-web-panels-add-button:hover,
+#sine-web-panels-toggle:hover {
   background: var(--sine-web-panels-hover);
 }
 
 .sine-web-panels-panel-button[active],
 .sine-web-panels-panel-button:active,
-#sine-web-panels-add-button:active {
+#sine-web-panels-add-button:active,
+#sine-web-panels-toggle:active {
   background: var(--sine-web-panels-active);
 }
 
@@ -316,22 +437,31 @@ tab[sine-web-panel-tab="true"] {
   z-index: 2147483647;
   cursor: ew-resize;
   background: transparent;
-  pointer-events: none;
+  /* Must stay `auto`. The handle straddles the panel's edge, and both sides of
+     it are remote content — chrome sees no pointer moves over that, so the
+     JS-driven hover state alone almost never fires and the affordance never
+     appeared. Hit-testing this element is what makes :hover and the ew-resize
+     cursor work at all. */
+  pointer-events: auto;
   transform: translateX(-50%);
 }
 
+/* The line itself: full height, so the edge of the panel lights up rather than
+   a stub in the middle of it. */
 #sine-web-panels-resizer::before {
   content: "";
   position: absolute;
-  top: 50%;
-  width: 2px;
-  height: 50px;
-  border-radius: 2px;
-  background: color-mix(in srgb, AccentColor 75%, transparent);
+  inset-block: 0;
+  width: var(--sine-web-panels-resizer-line);
+  border-radius: var(--sine-web-panels-resizer-line);
+  background: var(--sine-web-panels-accent);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--sine-web-panels-accent) 65%, transparent);
   opacity: 0;
   pointer-events: none;
-  transform: translateY(-50%);
-  transition: opacity 80ms ease-in-out;
+  transition:
+    opacity 80ms ease-in-out,
+    width 80ms ease-in-out,
+    box-shadow 80ms ease-in-out;
 }
 
 :root[sine-web-panels-side="right"] #sine-web-panels-resizer {
@@ -362,7 +492,17 @@ tab[sine-web-panel-tab="true"] {
 #sine-web-panels-resizer:hover::before,
 :root[sine-web-panels-resizer-hover="true"] #sine-web-panels-resizer::before,
 :root:has(#sine-web-panels-root[resizing]) #sine-web-panels-resizer::before {
+  width: var(--sine-web-panels-resizer-line-active);
+  border-radius: var(--sine-web-panels-resizer-line-active);
   opacity: 1;
+  box-shadow: 0 0 10px color-mix(in srgb, var(--sine-web-panels-accent) 75%, transparent);
+}
+
+/* Grabbed, not just pointed at. */
+:root:has(#sine-web-panels-root[resizing]) #sine-web-panels-resizer::before {
+  width: var(--sine-web-panels-resizer-line-dragging);
+  border-radius: var(--sine-web-panels-resizer-line-dragging);
+  box-shadow: 0 0 14px color-mix(in srgb, var(--sine-web-panels-accent) 85%, transparent);
 }
 
 .browserSidebarContainer.sine-web-panels-parent-background {
@@ -398,6 +538,14 @@ tab[sine-web-panel-tab="true"] {
 
 :root[sine-web-panels-side="left"] .browserSidebarContainer.sine-web-panels-overlay .browserContainer {
   inset-inline-start: var(--sine-web-panels-panel-offset) !important;
+}
+
+/* A video fullscreened from inside a panel: the panel keeps its browser, but
+   the pinned rail-side box has to give way to the whole window. */
+:root[sine-web-panels-panel-fullscreen] .browserSidebarContainer.sine-web-panels-overlay .browserContainer {
+  inset: 0 !important;
+  width: auto !important;
+  min-width: 0 !important;
 }
 
 #sine-web-panels-root[opening][side="right"] ~ .browserSidebarContainer.sine-web-panels-overlay .browserContainer,
@@ -454,10 +602,33 @@ tab[sine-web-panel-tab="true"] {
   -moz-appearance: none;
   box-sizing: border-box;
   --sine-web-panels-panel-color: var(--arrowpanel-color, CanvasText);
+  /* Toolkit paints ::part(content) with --panel-background-color, and Zen
+     points that at its translucent primary colour. Sine loads this sheet at
+     user level, so the override needs !important to beat Zen's author rule. */
+  --panel-background-color: var(--sine-web-panels-opaque-surface) !important;
+  --arrowpanel-background: var(--sine-web-panels-opaque-surface) !important;
+  /* Toolkit keeps a transparent 8px ring around an arrow panel for its
+     shadow, and the page shows through that ring. Against a dark page the
+     ring plus a near-identical grey read as a translucent popup. No ring:
+     the popup's box is exactly its content, painted on the host as well so
+     the result does not depend on ::part(content) matching. */
+  --panel-box-shadow-margin: 0px !important;
+  background: var(--sine-web-panels-opaque-surface) !important;
+  /* Direct values, for the same reason: the rail's border and radius tokens
+     do not reach this element. */
+  border: 1px solid color-mix(in srgb, currentColor 18%, transparent) !important;
+  border-radius: var(--panel-border-radius, 12px) !important;
   color: var(--sine-web-panels-panel-color);
   font: menu;
 }
 
+#sine-web-panels-editor::part(content) {
+  background: var(--sine-web-panels-opaque-surface) !important;
+  backdrop-filter: none !important;
+  box-shadow: none !important;
+}
+
+/* Add: [ URL ........ ][ Add ]. Edit: the same row, with Name under it. */
 #sine-web-panels-editor-content {
   box-sizing: border-box;
   width: min(520px, calc(100vw - 32px));
@@ -470,7 +641,24 @@ tab[sine-web-panel-tab="true"] {
   font: menu;
 }
 
-#sine-web-panels-url-input {
+#sine-web-panels-editor-submit {
+  grid-column: 2;
+  justify-self: end;
+}
+
+/* In Edit the URL spans the row like Name does, so the two fields line up
+   and Save drops to its own row on the right. */
+#sine-web-panels-editor[mode="edit"] #sine-web-panels-url-input,
+#sine-web-panels-name-input {
+  grid-column: 1 / -1;
+}
+
+#sine-web-panels-name-input[hidden] {
+  display: none;
+}
+
+#sine-web-panels-url-input,
+#sine-web-panels-name-input {
   appearance: none;
   -moz-appearance: none;
   box-sizing: border-box;
@@ -488,14 +676,16 @@ tab[sine-web-panel-tab="true"] {
   caret-color: currentColor;
 }
 
-#sine-web-panels-url-input:hover {
+#sine-web-panels-url-input:hover,
+#sine-web-panels-name-input:hover {
   background: var(
     --button-background-color-ghost-hover,
     color-mix(in srgb, currentColor 10%, transparent)
   );
 }
 
-#sine-web-panels-url-input:focus {
+#sine-web-panels-url-input:focus,
+#sine-web-panels-name-input:focus {
   background: var(
     --button-background-color-ghost-hover,
     color-mix(in srgb, currentColor 10%, transparent)
@@ -564,12 +754,11 @@ tab[sine-web-panel-tab="true"] {
   padding: 6px;
   border: 1px solid var(--sine-web-panels-panel-border);
   border-radius: var(--sine-web-panels-panel-radius);
-  background: var(--sine-web-panels-panel-background);
+  background: var(--sine-web-panels-opaque-surface);
   color: var(--sine-web-panels-panel-color);
   box-shadow:
     0 0 0 1px color-mix(in srgb, white 4%, transparent) inset,
     var(--windows-panel-box-shadow, var(--sine-web-panels-shadow));
-  backdrop-filter: blur(24px) saturate(140%) brightness(1.08);
   font: menu;
   pointer-events: auto;
 }
@@ -621,3 +810,225 @@ tab[sine-web-panel-tab="true"] {
     animation: none !important;
   }
 }
+
+/* --------------------------------------------------------------------------
+   Panel navigation controls
+   A small pill floating just outside the panel's outer edge, past the resize
+   handle, so it never sits over the panel's content or over Zen's toolbar.
+   Always shown while a panel is open: controls that come and go are harder
+   to trust than ones that stay put. It is positioned off the panel frame, so
+   it rides the edge during a resize instead of lagging behind it.
+   -------------------------------------------------------------------------- */
+.sine-web-panels-nav {
+  position: absolute;
+  inset-block-start: 10px;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 9px;
+  background: var(--zen-themed-toolbar-bg, Field);
+  color: FieldText;
+  border: 1px solid color-mix(in srgb, currentColor 14%, transparent);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.28);
+  pointer-events: auto;
+}
+
+:root[sine-web-panels-side="right"] .sine-web-panels-nav {
+  inset-inline-end: calc(100% + var(--sine-web-panels-resizer-width) + 4px);
+}
+
+:root[sine-web-panels-side="left"] .sine-web-panels-nav {
+  inset-inline-start: calc(100% + var(--sine-web-panels-resizer-width) + 4px);
+}
+
+/* The panel owns the whole window while a video from it is fullscreen; there
+   is no edge to sit beside. */
+:root[sine-web-panels-panel-fullscreen] .sine-web-panels-nav {
+  display: none;
+}
+
+.sine-web-panels-nav-button {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0;
+  opacity: 0.8;
+  -moz-context-properties: fill;
+}
+
+/* The icon goes on ::before, matching #sine-web-panels-add-button: a chrome
+   <button> paints its own background over a mask applied directly to it. */
+.sine-web-panels-nav-button::before {
+  content: "";
+  width: 14px;
+  height: 14px;
+  display: block;
+  background-color: currentColor;
+}
+
+.sine-web-panels-nav-button:hover:not(:disabled) {
+  background: var(--sine-web-panels-hover);
+  opacity: 1;
+}
+
+.sine-web-panels-nav-button:disabled {
+  opacity: 0.3;
+}
+
+.sine-web-panels-nav-back::before {
+  mask: url("chrome://browser/skin/zen-icons/back.svg") center / 14px 14px no-repeat;
+}
+
+.sine-web-panels-nav-forward::before {
+  mask: url("chrome://browser/skin/zen-icons/forward.svg") center / 14px 14px no-repeat;
+}
+
+.sine-web-panels-nav-reload::before {
+  mask: url("chrome://browser/skin/zen-icons/reload.svg") center / 14px 14px no-repeat;
+}
+
+.sine-web-panels-nav-home::before {
+  mask: url("chrome://browser/skin/zen-icons/home.svg") center / 14px 14px no-repeat;
+}
+
+/* --------------------------------------------------------------------------
+   Panel finder — a filter over the rail. Opened with the panel shortcut
+   modifier + P; searches every configured panel, not just loaded ones.
+   -------------------------------------------------------------------------- */
+#sine-web-panels-finder {
+  position: fixed;
+  z-index: 10001;
+  inset-block-start: var(--sine-web-panels-gap);
+  width: 320px;
+  max-height: 60vh;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border-radius: 10px;
+  background: var(--sine-web-panels-opaque-surface);
+  color: FieldText;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+}
+
+#sine-web-panels-finder[hidden] {
+  display: none;
+}
+
+:root[sine-web-panels-side="right"] #sine-web-panels-finder {
+  inset-inline-end: calc(var(--sine-web-panels-rail-size) + var(--sine-web-panels-gap) * 2);
+}
+
+:root[sine-web-panels-side="left"] #sine-web-panels-finder {
+  inset-inline-start: calc(var(--sine-web-panels-rail-size) + var(--sine-web-panels-gap) * 2);
+}
+
+#sine-web-panels-finder > input {
+  width: 100%;
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid color-mix(in srgb, currentColor 20%, transparent);
+  background: transparent;
+  color: inherit;
+}
+
+.sine-web-panels-finder-list {
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sine-web-panels-finder-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  text-align: start;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sine-web-panels-finder-row:hover {
+  background: var(--sine-web-panels-hover);
+}
+
+/* The keyboard selection has to read differently from a mouse hover, otherwise
+   arrowing through the list looks like nothing is happening. */
+.sine-web-panels-finder-row[selected] {
+  background: var(--sine-web-panels-active, var(--sine-web-panels-hover));
+  outline: 1px solid color-mix(in srgb, currentColor 35%, transparent);
+  outline-offset: -1px;
+}
+
+.sine-web-panels-finder-row .sine-web-panels-favicon {
+  width: 16px;
+  height: 16px;
+  flex: none;
+}
+
+/* Finder group headers: web panels first, then one per space. */
+.sine-web-panels-finder-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 8px 4px;
+  font-size: 0.75em;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  opacity: 0.6;
+  position: sticky;
+  inset-block-start: 0;
+  background: var(--zen-themed-toolbar-bg, Field);
+}
+
+.sine-web-panels-finder-group-icon {
+  font-size: 1.1em;
+  opacity: 0.9;
+}
+
+.sine-web-panels-finder-group-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The open-a-new-page fallback reads as an action, not a result. */
+.sine-web-panels-finder-open {
+  font-style: italic;
+  opacity: 0.85;
+}
+
+/* Folder breadcrumb on a finder row: the space is the group header, so the row
+   only needs to add the folder to complete Space / Folder / tab. */
+.sine-web-panels-finder-folder {
+  flex: none;
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  opacity: 0.55;
+}
+
+.sine-web-panels-finder-folder::after {
+  content: " / ";
+  opacity: 0.7;
+}
+
+.sine-web-panels-finder-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+

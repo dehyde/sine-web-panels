@@ -6,10 +6,47 @@
     "defaultValue": true
   },
   {
+    "type": "dropdown",
+    "label": "Panel shortcut",
+    "property": "sine.web-panels.shortcut-modifier",
+    "defaultValue": "accel+alt",
+    "placeholder": false,
+    "options": [
+      {
+        "value": "disabled",
+        "label": "Disabled"
+      },
+      {
+        "value": "accel",
+        "label": "Ctrl / ⌘ + 1…0"
+      },
+      {
+        "value": "accel+alt",
+        "label": "Ctrl / ⌘ + Alt / ⌥ + 1…0"
+      },
+      {
+        "value": "accel+shift",
+        "label": "Ctrl / ⌘ + Shift + 1…0"
+      },
+      {
+        "value": "alt",
+        "label": "Alt / ⌥ + 1…0"
+      },
+      {
+        "value": "alt+shift",
+        "label": "Alt / ⌥ + Shift + 1…0"
+      }
+    ]
+  },
+  {
+    "type": "separator",
+    "label": "Appearance"
+  },
+  {
     "type": "string",
-    "label": "Panel width",
-    "property": "sine.web-panels.width",
-    "defaultValue": "420",
-    "placeholder": "420"
+    "label": "Resize handle colour — leave empty to follow the browser theme",
+    "property": "sine.web-panels.resizer-color",
+    "defaultValue": "",
+    "placeholder": "#3b82f6, rebeccapurple, oklch(0.7 0.2 250)…"
   }
 ]
