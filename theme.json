@@ -12,7 +12,7 @@
   "ai": "yes",
   "js": true,
   "style": {
-    "chrome": "userChrome.css"
+    "chrome": "scripts/web-panels.css"
   },
   "preferences": "preferences.json",
   "supportsUnload": true,
