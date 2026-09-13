@@ -933,7 +933,7 @@ tab[sine-web-panel-tab="true"] {
 }
 
 .sine-web-panels-nav-pin::before {
-  mask: url("chrome://browser/skin/zen-icons/split.svg") center / 14px 14px no-repeat;
+  mask: url("chrome://browser/skin/zen-icons/pin.svg") center / 14px 14px no-repeat;
 }
 
 /* --------------------------------------------------------------------------
