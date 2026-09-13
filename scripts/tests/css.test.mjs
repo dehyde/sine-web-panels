@@ -109,10 +109,10 @@ test("the navigation controls use Zen Glance's circular control treatment", () =
   );
 });
 
-test("rail item hover follows Zen's default toolbar button corner radius", () => {
+test("rail item hover uses a softer 12px rounded-square treatment", () => {
   assert.match(
     css,
-    /border-radius:\s*var\(--toolbarbutton-border-radius,\s*var\(--zen-native-inner-radius,\s*8px\)\)/
+    /border-radius:\s*12px/
   );
 });
 

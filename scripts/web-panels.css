@@ -295,7 +295,7 @@ tab[sine-web-panel-tab="true"] {
   align-items: center;
   justify-content: center;
   border: 0;
-  border-radius: var(--toolbarbutton-border-radius, var(--zen-native-inner-radius, 8px));
+  border-radius: 12px;
   margin: 0;
   padding: 0;
   color: var(--toolbarbutton-icon-fill, inherit);
