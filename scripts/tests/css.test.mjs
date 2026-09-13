@@ -110,10 +110,9 @@ test("the navigation controls use Zen Glance's circular control treatment", () =
 });
 
 test("rail item hover uses a softer 12px rounded-square treatment", () => {
-  assert.match(
-    css,
-    /border-radius:\s*12px/
-  );
+  const item = rule(".sine-web-panels-item,\n#sine-web-panels-add-button,\n#sine-web-panels-toggle");
+
+  assert.match(item, /border-radius:\s*12px\s*!important/);
 });
 
 test("the page behind an open panel is dimmed without taking its pointer events", () => {
