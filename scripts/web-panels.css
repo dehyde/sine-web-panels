@@ -826,6 +826,7 @@ tab[sine-web-panel-tab="true"] {
 .sine-web-panels-nav {
   position: absolute;
   inset-block-start: 15px;
+  inset-block-end: 15px;
   z-index: 3;
   display: flex;
   flex-direction: column;
@@ -923,6 +924,16 @@ tab[sine-web-panel-tab="true"] {
 
 .sine-web-panels-nav-home::before {
   mask: url("chrome://browser/skin/zen-icons/home.svg") center / 14px 14px no-repeat;
+}
+
+/* Keep the native split action at the opposite end of the panel from page
+   navigation. It becomes unavailable once Zen's four-pane split is full. */
+.sine-web-panels-nav-pin {
+  margin-block-start: auto;
+}
+
+.sine-web-panels-nav-pin::before {
+  mask: url("chrome://browser/skin/zen-icons/split.svg") center / 14px 14px no-repeat;
 }
 
 /* --------------------------------------------------------------------------

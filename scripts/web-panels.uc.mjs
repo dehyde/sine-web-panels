@@ -172,6 +172,7 @@ export class SineWebPanels {
   #navForward;
   #navReload;
   #navHome;
+  #navPin;
 
   constructor(windowRef) {
     this.window = windowRef;
@@ -1190,6 +1191,7 @@ export class SineWebPanels {
     const browser = this.#activePanelBrowser();
     this.#navBack.hidden = !browser?.canGoBack;
     this.#navForward.hidden = !browser?.canGoForward;
+    this.#navPin.hidden = !this.#canPinPanelToSplitView();
   }
 
   #syncNavigationOrder() {
@@ -1200,7 +1202,81 @@ export class SineWebPanels {
     const buttons = this.#store.navigationOrder === NAVIGATION_ORDER_HOME_FIRST
       ? [this.#navHome, this.#navReload, this.#navBack, this.#navForward]
       : [this.#navBack, this.#navForward, this.#navReload, this.#navHome];
-    this.#navBar.append(...buttons);
+    this.#navBar.append(...buttons, this.#navPin);
+  }
+
+  #activePanelUrl() {
+    const url = this.#activePanelBrowser()?.currentURI?.spec;
+    return normalizeWebPanelUrl(url) ? url : null;
+  }
+
+  #splitViewCapacity(parentTab, splitter) {
+    const maxTabs = Number.isInteger(splitter?.MAX_TABS) ? splitter.MAX_TABS : 4;
+    if (!parentTab?.splitView) {
+      return { currentTabs: [parentTab], maxTabs };
+    }
+
+    const group = splitter?._data?.find(entry => entry?.tabs?.includes(parentTab));
+    return Array.isArray(group?.tabs) ? { currentTabs: group.tabs, maxTabs } : null;
+  }
+
+  #canPinPanelToSplitView() {
+    const parentTab = this.#surfaceState?.parentTab;
+    const splitter = this.window.gZenViewSplitter;
+    if (!parentTab || !this.#activePanelUrl() || typeof splitter?.splitTabs !== "function") {
+      return false;
+    }
+
+    const capacity = this.#splitViewCapacity(parentTab, splitter);
+    return Boolean(capacity && capacity.currentTabs.length < capacity.maxTabs);
+  }
+
+  #removeUnsplitTab(tab) {
+    if (!tab || tab.closing) {
+      return;
+    }
+    try {
+      this.window.gBrowser?.removeTab?.(tab, { skipPermitUnload: true, animate: false });
+    } catch (error) {
+      console.warn("[Web Panels] Could not remove the tab created for a failed split.", error);
+    }
+  }
+
+  #pinPanelToSplitView() {
+    if (!this.#canPinPanelToSplitView()) {
+      return;
+    }
+
+    const parentTab = this.#surfaceState?.parentTab;
+    const url = this.#activePanelUrl();
+    const gBrowser = this.window.gBrowser;
+    const splitter = this.window.gZenViewSplitter;
+    let newTab = null;
+
+    try {
+      newTab = gBrowser?.addTrustedTab?.(url, {
+        inBackground: true,
+        skipBackgroundNotify: true,
+        triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal(),
+      });
+      if (!newTab) {
+        return;
+      }
+
+      // Zen uses the same call for Glance: the original page is left-most and
+      // a fresh page joins on the right. If the parent is already split, its
+      // splitter appends the new tab, preserving the existing order.
+      const split = splitter.splitTabs([parentTab, newTab], "vsep", 1);
+      if (!split) {
+        this.#removeUnsplitTab(newTab);
+        return;
+      }
+
+      this.#closePanel({ animate: false });
+    } catch (error) {
+      console.warn("[Web Panels] Could not open the panel in Split View.", error);
+      this.#removeUnsplitTab(newTab);
+    }
   }
 
   #syncUnreadFromTab(itemId) {
@@ -1282,6 +1358,7 @@ export class SineWebPanels {
     this.#navForward = mk("forward", "Forward", () => this.#navGoForward());
     this.#navReload = mk("reload", "Reload", () => this.#navReloadPage());
     this.#navHome = mk("home", "Home (reset this panel)", () => this.#navGoHome());
+    this.#navPin = mk("pin", "Open in Split View", () => this.#pinPanelToSplitView());
 
     this.#navBar = bar;
     this.#syncNavigationOrder();

@@ -426,7 +426,7 @@ test("opening a panel mounts back, forward, reload and home beside it", () => {
   assert.equal(nav.getAttribute("aria-orientation"), "vertical");
   assert.deepEqual(
     [...nav.querySelectorAll(".sine-web-panels-nav-button")].map(button => button.getAttribute("aria-label")),
-    ["Back", "Forward", "Reload", "Home (reset this panel)"]
+    ["Back", "Forward", "Reload", "Home (reset this panel)", "Open in Split View"]
   );
   assert.equal(nav.querySelector(".sine-web-panels-nav-back").hidden, true, "no history yet");
   assert.equal(nav.querySelector(".sine-web-panels-nav-forward").hidden, true);
@@ -439,7 +439,7 @@ test("navigation order defaults to history first and updates from its setting", 
   const nav = navOf(app);
   assert.deepEqual(
     [...nav.querySelectorAll(".sine-web-panels-nav-button")].map(button => button.getAttribute("aria-label")),
-    ["Back", "Forward", "Reload", "Home (reset this panel)"],
+    ["Back", "Forward", "Reload", "Home (reset this panel)", "Open in Split View"],
     "the existing order remains the default"
   );
 
@@ -447,7 +447,7 @@ test("navigation order defaults to history first and updates from its setting", 
 
   assert.deepEqual(
     [...nav.querySelectorAll(".sine-web-panels-nav-button")].map(button => button.getAttribute("aria-label")),
-    ["Home (reset this panel)", "Reload", "Back", "Forward"],
+    ["Home (reset this panel)", "Reload", "Back", "Forward", "Open in Split View"],
     "the alternative puts reset and refresh before history"
   );
 });
@@ -463,6 +463,96 @@ test("panel navigation buttons opt out of Zen's global squircle shape", () => {
       "Zen's Glance controls stay circular even when the global squircle preference is on"
     );
   }
+});
+
+function installSplitView(app, { maxTabs = 4, groupTabs = [], splitResult = "success" } = {}) {
+  const calls = [];
+  const group = { tabs: [...groupTabs] };
+  app.window.gZenViewSplitter = {
+    MAX_TABS: maxTabs,
+    _data: groupTabs.length ? [group] : [],
+    splitTabs(tabs, layout, initialIndex) {
+      calls.push({ tabs, layout, initialIndex });
+      if (splitResult === "failure") {
+        return undefined;
+      }
+      for (const tab of tabs) {
+        if (!group.tabs.includes(tab)) {
+          group.tabs.push(tab);
+          tab.splitView = true;
+        }
+      }
+      if (!this._data.length) {
+        this._data.push(group);
+      }
+      app.window.gBrowser.selectedTab = tabs[initialIndex];
+      return group;
+    },
+  };
+  return { calls, group };
+}
+
+test("pin opens the panel's current location in a native split view, then closes the panel", () => {
+  const { app, ordinary } = mountWithPanels(["https://mail.example/"]);
+  const split = installSplitView(app);
+
+  railButton(app, "panel-1").dispatch("click");
+  app.window.gBrowser.selectedTab.linkedBrowser.currentURI.spec = "https://mail.example/inbox/42";
+  navOf(app).querySelector(".sine-web-panels-nav-pin").dispatch("click");
+
+  assert.equal(split.calls.length, 1, "Zen receives one split request");
+  assert.equal(split.calls[0].layout, "vsep", "the split opens left-to-right");
+  assert.equal(split.calls[0].initialIndex, 1, "the new right-hand tab is selected");
+  assert.equal(split.calls[0].tabs[0], ordinary, "the existing page stays on the left");
+  assert.equal(split.calls[0].tabs[1].linkedBrowser.currentURI.spec, "https://mail.example/inbox/42");
+  assert.equal(app.root().hasAttribute("open"), false, "the Web Panel closes after the native split succeeds");
+});
+
+test("pin appends to the right of an existing split group until its fourth pane", () => {
+  const { app, ordinary } = mountWithPanels(["https://mail.example/"]);
+  const second = app.addTab({ url: "https://second.example/" });
+  const third = app.addTab({ url: "https://third.example/" });
+  ordinary.splitView = true;
+  second.splitView = true;
+  third.splitView = true;
+  const split = installSplitView(app, { groupTabs: [ordinary, second, third] });
+
+  railButton(app, "panel-1").dispatch("click");
+  navOf(app).querySelector(".sine-web-panels-nav-pin").dispatch("click");
+
+  assert.equal(split.calls.length, 1);
+  assert.deepEqual(split.group.tabs.slice(0, 3), [ordinary, second, third]);
+  assert.equal(split.group.tabs.length, 4, "the new page is appended as the fourth pane");
+});
+
+test("pin is unavailable when the parent tab already has four split panes", () => {
+  const { app, ordinary } = mountWithPanels(["https://mail.example/"]);
+  const second = app.addTab({ url: "https://second.example/" });
+  const third = app.addTab({ url: "https://third.example/" });
+  const fourth = app.addTab({ url: "https://fourth.example/" });
+  for (const tab of [ordinary, second, third, fourth]) {
+    tab.splitView = true;
+  }
+  const split = installSplitView(app, { groupTabs: [ordinary, second, third, fourth] });
+
+  railButton(app, "panel-1").dispatch("click");
+  const pin = navOf(app).querySelector(".sine-web-panels-nav-pin");
+  assert.equal(pin.hidden, true, "the button is hidden rather than replacing an existing pane");
+  pin.dispatch("click");
+  assert.equal(split.calls.length, 0, "a stale click cannot create a fifth pane");
+});
+
+test("pin leaves the panel open and removes the temporary tab when Zen declines the split", () => {
+  const { app } = mountWithPanels(["https://mail.example/"]);
+  const split = installSplitView(app, { splitResult: "failure" });
+
+  railButton(app, "panel-1").dispatch("click");
+  const tabCountBeforePin = app.window.gBrowser.tabs.length;
+  navOf(app).querySelector(".sine-web-panels-nav-pin").dispatch("click");
+
+  assert.equal(split.calls.length, 1);
+  assert.equal(app.root().getAttribute("open"), "true", "the panel stays available after a failed native action");
+  assert.equal(app.window.gBrowser.tabs.length, tabCountBeforePin, "the unused ordinary tab is rolled back");
 });
 
 test("back and forward follow the panel browser's history", () => {

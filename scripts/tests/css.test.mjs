@@ -109,6 +109,19 @@ test("the navigation controls use Zen Glance's circular control treatment", () =
   );
 });
 
+test("the split action stays at the bottom of the panel and uses Zen's native split icon", () => {
+  const nav = rule(".sine-web-panels-nav");
+  const pin = rule(".sine-web-panels-nav-pin");
+
+  assert.match(nav, /inset-block-end:\s*15px/, "the control lane spans the panel height");
+  assert.match(pin, /margin-block-start:\s*auto/, "the split action anchors at the bottom");
+  assert.match(
+    css,
+    /\.sine-web-panels-nav-pin::before\s*\{[\s\S]*?zen-icons\/split\.svg/,
+    "the button communicates Zen's native split action"
+  );
+});
+
 test("rail item hover follows Zen's default toolbar button corner radius", () => {
   assert.match(
     css,
