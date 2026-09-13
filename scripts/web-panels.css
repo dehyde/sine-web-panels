@@ -18,14 +18,16 @@
   --sine-web-panels-offset: var(--sine-web-panels-visible-rail-size);
   --sine-web-panels-panel-offset: var(--sine-web-panels-gap);
   --sine-web-panels-resizer-width: 8px;
-  /* The hit area remains generous; the visible cue is intentionally quiet. */
+  /* The hit area remains generous; the visible cue is intentionally quiet but
+     still perceptible at regular display scaling. */
   --sine-web-panels-resizer-line: 1px;
-  --sine-web-panels-resizer-line-active: 1px;
+  --sine-web-panels-resizer-line-active: 2px;
   --sine-web-panels-resizer-line-dragging: 2px;
   --sine-web-panels-resizer-edge-inset: 24px;
-  --sine-web-panels-nav-button-size: 28px;
-  /* 28px button plus the 8px resize handle and a 4px breathing gap. */
-  --sine-web-panels-navigation-lane: 40px;
+  --sine-web-panels-nav-button-size: var(--size-item-large, 34px);
+  /* A Glance-size button plus the 8px resize handle keeps the controls out
+     of Zen's sidebar without widening the panel into it. */
+  --sine-web-panels-navigation-lane: 46px;
   /* The strip a collapsed rail listens on. Kept narrow: it sits over the page,
      so every pixel of it is a pixel of scrollbar the page does not get. */
   --sine-web-panels-edge-size: 6px;
@@ -38,11 +40,11 @@
     transparent
   );
   --sine-web-panels-border: color-mix(in srgb, currentColor 14%, transparent);
-  /* Default to Zen's ordinary chrome colour, not its chosen primary accent.
-     A person's existing custom resize-colour setting still overrides this. */
+  /* Follow Zen Glance's active colour. A person's existing custom
+     resize-colour setting still overrides this. */
   --sine-web-panels-accent: var(
-    --toolbarbutton-icon-fill,
-    color-mix(in srgb, currentColor 44%, transparent)
+    --zen-primary-color,
+    var(--zen-colors-primary, var(--focus-outline-color, AccentColor))
   );
   --sine-web-panels-radius: var(--zen-native-inner-radius, 12px);
   --sine-web-panels-shadow: var(
@@ -495,12 +497,14 @@ tab[sine-web-panel-tab="true"] {
   width: var(--sine-web-panels-resizer-line-active);
   border-radius: var(--sine-web-panels-resizer-line-active);
   opacity: 1;
+  box-shadow: 0 0 6px color-mix(in srgb, var(--sine-web-panels-accent) 45%, transparent);
 }
 
 /* Grabbed, not just pointed at. */
 :root:has(#sine-web-panels-root[resizing]) #sine-web-panels-resizer::before {
   width: var(--sine-web-panels-resizer-line-dragging);
   border-radius: var(--sine-web-panels-resizer-line-dragging);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--sine-web-panels-accent) 60%, transparent);
 }
 
 .browserSidebarContainer.sine-web-panels-parent-background {
@@ -820,11 +824,11 @@ tab[sine-web-panel-tab="true"] {
    -------------------------------------------------------------------------- */
 .sine-web-panels-nav {
   position: absolute;
-  inset-block-start: 10px;
+  inset-block-start: 15px;
   z-index: 3;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 12px;
   padding: 0;
   background: transparent;
   color: var(--toolbarbutton-icon-fill, FieldText);
@@ -854,18 +858,27 @@ tab[sine-web-panel-tab="true"] {
 .sine-web-panels-nav-button {
   width: var(--sine-web-panels-nav-button-size);
   height: var(--sine-web-panels-nav-button-size);
-  padding: 0;
-  border: 1px solid color-mix(in srgb, currentColor 14%, transparent);
+  padding: 8px;
+  appearance: none;
+  -moz-appearance: none;
+  border: 0;
   border-radius: 999px;
-  background: var(--zen-themed-toolbar-bg, var(--toolbar-bgcolor, Field));
-  color: var(--toolbarbutton-icon-fill, inherit);
+  background: color-mix(
+    in srgb,
+    light-dark(rgb(24, 24, 24), rgb(231, 231, 231)) 96%,
+    var(--zen-primary-color)
+  );
+  color: var(--zen-primary-color) !important;
   display: flex;
   align-items: center;
   justify-content: center;
   font-size: 0;
-  opacity: 1;
+  opacity: 1 !important;
   -moz-context-properties: fill;
-  box-shadow: 0 2px 8px color-mix(in srgb, black 18%, transparent);
+  box-shadow: 0 0 12px 1px rgba(0, 0, 0, 0.07);
+  transition:
+    background 0.05s ease,
+    scale 0.05s ease;
 }
 
 /* The icon goes on ::before, matching #sine-web-panels-add-button: a chrome
@@ -879,11 +892,16 @@ tab[sine-web-panel-tab="true"] {
 }
 
 .sine-web-panels-nav-button:hover:not(:disabled) {
-  background: var(--sine-web-panels-hover);
+  background: light-dark(rgb(41, 41, 41), rgb(204, 204, 204));
+  scale: 1.02;
+}
+
+.sine-web-panels-nav-button:hover:not(:disabled):active {
+  scale: 0.98;
 }
 
 .sine-web-panels-nav-button:disabled {
-  opacity: 0.3;
+  opacity: 0.5 !important;
 }
 
 .sine-web-panels-nav-back::before {

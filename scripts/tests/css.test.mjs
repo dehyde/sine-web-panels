@@ -45,15 +45,25 @@ test("the resize indicator follows a theme colour, not a hard-coded one", () => 
   assert.match(indicator, /background:\s*var\(--sine-web-panels-accent\)/);
 });
 
-// A var() chain that resolves to nothing paints nothing, which is exactly the
-// failure being fixed — so the last link must be a colour that always exists.
-test("the default resize cue uses Zen's neutral icon colour, not the primary accent", () => {
+// Zen Glance uses the active Zen colour for its controls. The resize cue is
+// part of that same interaction surface, but stays short so it does not turn
+// back into the old full-height stripe.
+test("the default resize cue follows Zen's active colour", () => {
   const root = rule(":root");
 
   assert.match(root, /--sine-web-panels-accent:/);
-  assert.match(root, /--toolbarbutton-icon-fill/, "follows Zen's ordinary chrome colour");
-  assert.doesNotMatch(root, /--zen-primary-color/, "does not force the primary accent");
-  assert.match(root, /currentColor/, "has a resilient neutral fallback");
+  assert.match(root, /--zen-primary-color/, "matches Zen Glance's icon colour");
+  assert.match(root, /AccentColor/, "has a resilient fallback");
+});
+
+test("the short resize cue remains visible while its edge is hovered", () => {
+  const root = rule(":root");
+
+  assert.match(root, /--sine-web-panels-resizer-line-active:\s*2px/);
+  assert.match(
+    css,
+    /#sine-web-panels-resizer:hover::before,[\s\S]*?box-shadow:\s*0 0 \d+px/
+  );
 });
 
 // --------------------------------------------------------------------------
@@ -72,7 +82,7 @@ test("the navigation controls float beside the panel, not over it", () => {
   assert.doesNotMatch(nav, /inset-inline:\s*0/, "does not span the panel's width");
   assert.match(nav, /flex-direction:\s*column/, "a vertical stack");
   assert.match(nav, /background:\s*transparent/, "the buttons, not a pill, own the surface");
-  assert.match(root, /--sine-web-panels-navigation-lane:\s*40px/, "the layout reserves room for the controls");
+  assert.match(root, /--sine-web-panels-navigation-lane:\s*46px/, "the layout reserves room for the controls");
 
   const right = rule(':root[sine-web-panels-side="right"] .sine-web-panels-nav');
   const left = rule(':root[sine-web-panels-side="left"] .sine-web-panels-nav');
@@ -82,16 +92,21 @@ test("the navigation controls float beside the panel, not over it", () => {
   assert.match(right, /--sine-web-panels-nav-button-size/, "accounts for the button itself");
 });
 
-test("the navigation controls use Zen-themed circular button surfaces", () => {
+test("the navigation controls use Zen Glance's circular control treatment", () => {
   const button = rule(".sine-web-panels-nav-button");
-  const root = rule(":root");
 
-  assert.match(root, /--sine-web-panels-nav-button-size:\s*28px/);
   assert.match(button, /width:\s*var\(--sine-web-panels-nav-button-size\)/);
   assert.match(button, /height:\s*var\(--sine-web-panels-nav-button-size\)/);
+  assert.match(button, /appearance:\s*none/);
+  assert.match(button, /-moz-appearance:\s*none/);
   assert.match(button, /border-radius:\s*999px/);
-  assert.match(button, /background:\s*var\(--zen-themed-toolbar-bg/);
-  assert.doesNotMatch(button, /background:\s*white\b/i, "never hard-codes a light-only surface");
+  assert.match(button, /background:\s*color-mix\(/);
+  assert.match(button, /--zen-primary-color/);
+  assert.match(button, /color:\s*var\(--zen-primary-color\)\s*!important/);
+  assert.match(
+    css,
+    /\.sine-web-panels-nav-button:hover:not\(:disabled\)\s*\{[\s\S]*?scale:\s*1\.02/
+  );
 });
 
 test("rail item hover follows Zen's default toolbar button corner radius", () => {

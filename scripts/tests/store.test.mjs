@@ -103,6 +103,16 @@ test("viewport geometry reserves the floating navigation lane before clamping th
   );
 });
 
+test("viewport geometry reserves the full Glance-size control lane", () => {
+  const rect = { top: 40, left: 320, width: 1600, height: 1000 };
+
+  assert.equal(
+    calculateWebPanelViewportGeometry(rect, WINDOW).maxWidth,
+    1474,
+    "a 34px control, 8px resize target, and 4px gap stay clear of Zen's sidebar"
+  );
+});
+
 test("clampWebPanelWidth keeps a width inside the measured maximum", () => {
   assert.equal(clampWebPanelWidth(600, 1520), 600);
   assert.equal(clampWebPanelWidth(2009, 1520), 1520, "the 2009px regression");

@@ -17,9 +17,9 @@ export const PANEL_VIEWPORT_INSET = 8;
 export const PANEL_VIEWPORT_MAX_WIDTH_RATIO = 0.95;
 // The navigation controls sit just outside the panel frame. Reserve their
 // whole footprint while clamping so a narrow panel cannot push them into
-// Zen's sidebar. This stays deliberately in sync with the 28px control plus
-// the 12px resizer/gutter lane in the stylesheet.
-export const PANEL_CONTROL_LANE = 40;
+// Zen's sidebar. This stays deliberately in sync with the 34px Glance-size
+// control, 8px resizer target, and 4px gutter in the stylesheet.
+export const PANEL_CONTROL_LANE = 46;
 
 function positiveNumber(value, fallback) {
   return typeof value === "number" && Number.isFinite(value) && value > 0
