@@ -286,6 +286,7 @@ tab[sine-web-panel-tab="true"] {
 #sine-web-panels-add-button,
 #sine-web-panels-toggle {
   appearance: none;
+  -moz-appearance: none;
   box-sizing: border-box;
   width: var(--sine-web-panels-button-size);
   min-width: var(--sine-web-panels-button-size);
