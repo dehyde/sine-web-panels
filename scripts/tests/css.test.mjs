@@ -132,7 +132,7 @@ test("rail item hover follows Zen's default toolbar button corner radius", () =>
 test("the page behind an open panel is dimmed without taking its pointer events", () => {
   const backdrop = rule("#sine-web-panels-backdrop");
 
-  assert.match(backdrop, /background:\s*color-mix\(in srgb, black 22%, transparent\)/);
+  assert.match(backdrop, /background:\s*color-mix\(in srgb, black 50%, transparent\)/);
   assert.match(backdrop, /pointer-events:\s*none/);
 });
 

@@ -167,9 +167,9 @@
 }
 
 #sine-web-panels-backdrop {
-  /* A small dim makes the panel read as the active surface without making the
+  /* A strong dim makes the panel the clear active surface without making the
      panel itself translucent or preventing the page behind it from working. */
-  background: color-mix(in srgb, black 22%, transparent);
+  background: color-mix(in srgb, black 50%, transparent);
   pointer-events: none;
 }
 
