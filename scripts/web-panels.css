@@ -286,7 +286,6 @@ tab[sine-web-panel-tab="true"] {
 #sine-web-panels-add-button,
 #sine-web-panels-toggle {
   appearance: none;
-  -moz-appearance: none;
   box-sizing: border-box;
   width: var(--sine-web-panels-button-size);
   min-width: var(--sine-web-panels-button-size);
@@ -296,7 +295,7 @@ tab[sine-web-panel-tab="true"] {
   align-items: center;
   justify-content: center;
   border: 0;
-  border-radius: 12px !important;
+  border-radius: var(--toolbarbutton-border-radius, var(--zen-native-inner-radius, 8px));
   margin: 0;
   padding: 0;
   color: var(--toolbarbutton-icon-fill, inherit);
