@@ -43,6 +43,23 @@
     "label": "Appearance"
   },
   {
+    "type": "dropdown",
+    "label": "Navigation control order",
+    "property": "sine.web-panels.navigation-order",
+    "defaultValue": "history-first",
+    "placeholder": false,
+    "options": [
+      {
+        "value": "history-first",
+        "label": "Back, Forward, Refresh, Home"
+      },
+      {
+        "value": "home-first",
+        "label": "Home, Refresh, Back, Forward"
+      }
+    ]
+  },
+  {
     "type": "string",
     "label": "Resize handle colour — leave empty to follow the browser theme",
     "property": "sine.web-panels.resizer-color",

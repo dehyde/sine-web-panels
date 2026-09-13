@@ -1,6 +1,7 @@
 import { WebPanelsRuntime } from "./web-panels-runtime.uc.mjs";
 import {
   MIN_PANEL_WIDTH,
+  NAVIGATION_ORDER_HOME_FIRST,
   PANEL_TYPE,
   SEPARATOR_TYPE,
   WebPanelsStore,
@@ -82,6 +83,7 @@ const TAB_MENU_ITEM_ID = "sine-web-panels-tab-context-add";
 const RESIZER_ID = "sine-web-panels-resizer";
 const FINDER_ID = "sine-web-panels-finder";
 const TOGGLE_ID = "sine-web-panels-toggle";
+const RAIL_SEPARATOR_ID = "sine-web-panels-rail-separator";
 const EDGE_ID = "sine-web-panels-edge";
 
 // How long the peeked rail waits after the pointer leaves before sliding back
@@ -218,6 +220,7 @@ export class SineWebPanels {
     if (this.#prefObserver) {
       Services.prefs.removeObserver(WebPanelsStore.prefs.enabled, this.#prefObserver);
       Services.prefs.removeObserver(WebPanelsStore.prefs.resizerColor, this.#prefObserver);
+      Services.prefs.removeObserver(WebPanelsStore.prefs.navigationOrder, this.#prefObserver);
     }
     if (this.#tabsProgressListener) {
       this.window.gBrowser?.removeTabsProgressListener?.(this.#tabsProgressListener);
@@ -275,6 +278,12 @@ export class SineWebPanels {
       id: TOGGLE_ID,
       className: "sine-web-panels-toggle",
     });
+    const railSeparator = this.#el("div", {
+      id: RAIL_SEPARATOR_ID,
+      role: "separator",
+      "aria-orientation": "horizontal",
+      "aria-label": "Web Panels rail separator",
+    });
     const addButton = this.#button({
       id: ADD_BUTTON_ID,
       label: "",
@@ -282,7 +291,7 @@ export class SineWebPanels {
       className: "sine-web-panels-add-button",
     });
     addButton.setAttribute("aria-label", "New Web Panel");
-    this.#rail.append(this.#toggle, this.#list, addButton);
+    this.#rail.append(this.#toggle, railSeparator, this.#list, addButton);
 
     // The strip the pointer has to reach to bring a collapsed rail back. It is
     // an element rather than a pointermove test on the window because chrome
@@ -417,6 +426,8 @@ export class SineWebPanels {
           this.#applyEnabledState();
         } else if (prefName === WebPanelsStore.prefs.resizerColor) {
           this.#applyResizerColor();
+        } else if (prefName === WebPanelsStore.prefs.navigationOrder) {
+          this.#syncNavigationOrder();
         }
       },
     };
@@ -426,6 +437,7 @@ export class SineWebPanels {
     Services.prefs.addObserver(WebPanelsStore.prefs.enabled, this.#prefObserver);
     // Unlike `collapsed`, this one is appearance and belongs to every window.
     Services.prefs.addObserver(WebPanelsStore.prefs.resizerColor, this.#prefObserver);
+    Services.prefs.addObserver(WebPanelsStore.prefs.navigationOrder, this.#prefObserver);
   }
 
   #applyEnabledState() {
@@ -1176,8 +1188,19 @@ export class SineWebPanels {
       return;
     }
     const browser = this.#activePanelBrowser();
-    this.#navBack.disabled = !browser?.canGoBack;
-    this.#navForward.disabled = !browser?.canGoForward;
+    this.#navBack.hidden = !browser?.canGoBack;
+    this.#navForward.hidden = !browser?.canGoForward;
+  }
+
+  #syncNavigationOrder() {
+    if (!this.#navBar) {
+      return;
+    }
+
+    const buttons = this.#store.navigationOrder === NAVIGATION_ORDER_HOME_FIRST
+      ? [this.#navHome, this.#navReload, this.#navBack, this.#navForward]
+      : [this.#navBack, this.#navForward, this.#navReload, this.#navHome];
+    this.#navBar.append(...buttons);
   }
 
   #syncUnreadFromTab(itemId) {
@@ -1260,8 +1283,8 @@ export class SineWebPanels {
     this.#navReload = mk("reload", "Reload", () => this.#navReloadPage());
     this.#navHome = mk("home", "Home (reset this panel)", () => this.#navGoHome());
 
-    bar.append(this.#navBack, this.#navForward, this.#navReload, this.#navHome);
     this.#navBar = bar;
+    this.#syncNavigationOrder();
     this.#updateNavState();
     return bar;
   }
@@ -2032,6 +2055,20 @@ export class SineWebPanels {
     // numbering follows the visible panel order rather than the raw item
     // index. The modifier combination is configurable in the mod's settings.
     if (!shortcutMatches(event, this.#store.shortcutModifier)) {
+      return;
+    }
+
+    // The physical section key reports either § or ± depending on the active
+    // keyboard layout and whether the configured shortcut includes Alt / ⌥.
+    if (event.key === "§" || event.key === "±") {
+      const panels = this.#items.filter(isPanel);
+      const activeIndex = panels.findIndex(panel => panel.id === this.#activeId);
+      const target = panels[(activeIndex + 1 + panels.length) % panels.length];
+      if (target) {
+        event.preventDefault();
+        event.stopPropagation();
+        this.#openPanel(target);
+      }
       return;
     }
 

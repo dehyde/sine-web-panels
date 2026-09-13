@@ -169,7 +169,7 @@
 #sine-web-panels-backdrop {
   /* A small dim makes the panel read as the active surface without making the
      panel itself translucent or preventing the page behind it from working. */
-  background: color-mix(in srgb, black 14%, transparent);
+  background: color-mix(in srgb, black 22%, transparent);
   pointer-events: none;
 }
 
@@ -346,6 +346,16 @@ tab[sine-web-panel-tab="true"] {
   display: block;
   background-color: currentColor;
   mask: url("chrome://browser/skin/zen-icons/plus.svg") center / 16px 16px no-repeat;
+}
+
+/* This divider belongs to the rail itself. Unlike saved spacers it is never
+   serialized, dragged, or included in keyboard panel positions. */
+#sine-web-panels-rail-separator {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 1px;
+  background: color-mix(in srgb, currentColor 34%, transparent);
+  pointer-events: none;
 }
 
 .sine-web-panels-panel-button:hover,
@@ -893,6 +903,10 @@ tab[sine-web-panel-tab="true"] {
 
 .sine-web-panels-nav-button:disabled {
   opacity: 0.5 !important;
+}
+
+.sine-web-panels-nav-button[hidden] {
+  display: none;
 }
 
 .sine-web-panels-nav-back::before {

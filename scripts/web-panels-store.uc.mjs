@@ -104,6 +104,7 @@ const PREFS = Object.freeze({
   width: "sine.web-panels.width",
   items: "sine.web-panels.items",
   shortcutModifier: "sine.web-panels.shortcut-modifier",
+  navigationOrder: "sine.web-panels.navigation-order",
   lastUrls: "sine.web-panels.last-urls",
   lastTitles: "sine.web-panels.last-titles",
   resizerColor: "sine.web-panels.resizer-color",
@@ -156,6 +157,18 @@ export const SHORTCUT_MODIFIERS = Object.freeze([
 ]);
 
 export const DEFAULT_SHORTCUT_MODIFIER = "accel+alt";
+
+export const NAVIGATION_ORDER_HISTORY_FIRST = "history-first";
+export const NAVIGATION_ORDER_HOME_FIRST = "home-first";
+export const NAVIGATION_ORDERS = Object.freeze([
+  NAVIGATION_ORDER_HISTORY_FIRST,
+  NAVIGATION_ORDER_HOME_FIRST,
+]);
+export const DEFAULT_NAVIGATION_ORDER = NAVIGATION_ORDER_HISTORY_FIRST;
+
+export function normalizeNavigationOrder(value) {
+  return NAVIGATION_ORDERS.includes(value) ? value : DEFAULT_NAVIGATION_ORDER;
+}
 
 // Values written before the setting became platform-neutral.
 const LEGACY_SHORTCUT_MODIFIERS = Object.freeze({
@@ -312,6 +325,16 @@ export class WebPanelsStore {
 
   set shortcutModifier(value) {
     setStringPref(PREFS.shortcutModifier, normalizeShortcutModifier(value));
+  }
+
+  get navigationOrder() {
+    return normalizeNavigationOrder(
+      readStringPref(PREFS.navigationOrder, DEFAULT_NAVIGATION_ORDER)
+    );
+  }
+
+  set navigationOrder(value) {
+    setStringPref(PREFS.navigationOrder, normalizeNavigationOrder(value));
   }
 
   // Where each panel actually was, keyed by panel id. Deliberately a separate

@@ -7,6 +7,7 @@ const PREFS = {
   collapsed: "sine.web-panels.collapsed",
   width: "sine.web-panels.width",
   items: "sine.web-panels.items",
+  navigationOrder: "sine.web-panels.navigation-order",
 };
 
 // The controller reads globalThis.Services at import time, and createChromeWindow
@@ -61,6 +62,17 @@ test("mounting builds the rail and reserves a strip of window for it", () => {
 
   app.controller.destroy();
   assert.equal(app.root(), null, "and unloading leaves nothing behind");
+});
+
+test("the rail keeps its fixed separator directly after the collapse toggle", () => {
+  const app = mount();
+  const rail = app.el("rail");
+  const separator = app.el("rail-separator");
+
+  assert.equal(rail.children[0], app.el("toggle"), "the collapse control stays first");
+  assert.equal(separator.getAttribute("role"), "separator");
+  assert.equal(rail.children[1], separator, "the separator cannot move into a panel's saved order");
+  assert.equal(separator.dataset.itemId, undefined, "it is not a saved or draggable rail item");
 });
 
 test("a width stored from a wider window is clamped on the way in", () => {
@@ -416,8 +428,28 @@ test("opening a panel mounts back, forward, reload and home beside it", () => {
     [...nav.querySelectorAll(".sine-web-panels-nav-button")].map(button => button.getAttribute("aria-label")),
     ["Back", "Forward", "Reload", "Home (reset this panel)"]
   );
-  assert.equal(nav.querySelector(".sine-web-panels-nav-back").disabled, true, "no history yet");
-  assert.equal(nav.querySelector(".sine-web-panels-nav-forward").disabled, true);
+  assert.equal(nav.querySelector(".sine-web-panels-nav-back").hidden, true, "no history yet");
+  assert.equal(nav.querySelector(".sine-web-panels-nav-forward").hidden, true);
+});
+
+test("navigation order defaults to history first and updates from its setting", () => {
+  const { app } = mountWithPanels(["https://mail.example/"]);
+  railButton(app, "panel-1").dispatch("click");
+
+  const nav = navOf(app);
+  assert.deepEqual(
+    [...nav.querySelectorAll(".sine-web-panels-nav-button")].map(button => button.getAttribute("aria-label")),
+    ["Back", "Forward", "Reload", "Home (reset this panel)"],
+    "the existing order remains the default"
+  );
+
+  app.prefs.setStringPref(PREFS.navigationOrder, "home-first");
+
+  assert.deepEqual(
+    [...nav.querySelectorAll(".sine-web-panels-nav-button")].map(button => button.getAttribute("aria-label")),
+    ["Home (reset this panel)", "Reload", "Back", "Forward"],
+    "the alternative puts reset and refresh before history"
+  );
 });
 
 test("panel navigation buttons opt out of Zen's global squircle shape", () => {
@@ -451,7 +483,41 @@ test("back and forward follow the panel browser's history", () => {
   // catches up with the browser's without a separate event.
   nav.querySelector(".sine-web-panels-nav-back").dispatch("click");
   assert.deepEqual(calls, ["back"]);
-  assert.equal(nav.querySelector(".sine-web-panels-nav-back").disabled, false);
+  assert.equal(nav.querySelector(".sine-web-panels-nav-back").hidden, false);
+});
+
+test("the section-key shortcut advances panels, skips separators, and wraps", () => {
+  const app = mount({
+    prefs: {
+      [PREFS.items]: JSON.stringify([
+        { type: "panel", id: "panel-1", url: "https://mail.example/" },
+        { type: "separator", id: "separator-1" },
+        { type: "panel", id: "panel-2", url: "https://chat.example/" },
+      ]),
+    },
+  });
+  app.addTab({ url: "https://plane.example/", select: true });
+
+  app.document.dispatch("keydown", keydown("IntlBackslash", {
+    ctrlKey: true,
+    altKey: true,
+    key: "§",
+  }));
+  assert.equal(app.root().getAttribute("active"), "panel-1", "none open starts at the first panel");
+
+  app.document.dispatch("keydown", keydown("IntlBackslash", {
+    ctrlKey: true,
+    altKey: true,
+    key: "±",
+  }));
+  assert.equal(app.root().getAttribute("active"), "panel-2", "the alternate section glyph advances too");
+
+  app.document.dispatch("keydown", keydown("IntlBackslash", {
+    ctrlKey: true,
+    altKey: true,
+    key: "§",
+  }));
+  assert.equal(app.root().getAttribute("active"), "panel-1", "the last panel wraps to the first");
 });
 
 test("home reloads the panel's configured URL and forgets where it drifted to", () => {
