@@ -129,11 +129,14 @@ test("rail item hover follows Zen's default toolbar button corner radius", () =>
   );
 });
 
-test("the page behind an open panel is dimmed without taking its pointer events", () => {
-  const backdrop = rule("#sine-web-panels-backdrop");
+test("the page behind an open panel becomes translucent without a black scrim", () => {
+  const viewport = rule(
+    ".browserSidebarContainer.sine-web-panels-parent-background .browserContainer > browser"
+  );
 
-  assert.match(backdrop, /background:\s*color-mix\(in srgb, black 50%, transparent\)/);
-  assert.match(backdrop, /pointer-events:\s*none/);
+  assert.match(viewport, /opacity:\s*0\.5/);
+  assert.doesNotMatch(css, /#sine-web-panels-backdrop/);
+  assert.doesNotMatch(css, /color-mix\(in srgb, black 50%, transparent\)/);
 });
 
 test("the navigation controls do not come and go with the pointer", () => {

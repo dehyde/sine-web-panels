@@ -166,20 +166,6 @@
   display: none !important;
 }
 
-#sine-web-panels-backdrop {
-  /* A strong dim makes the panel the clear active surface without making the
-     panel itself translucent or preventing the page behind it from working. */
-  background: color-mix(in srgb, black 50%, transparent);
-  pointer-events: none;
-}
-
-.browserSidebarContainer.sine-web-panels-parent-background .browserContainer > #sine-web-panels-backdrop {
-  position: absolute;
-  inset: 0;
-  z-index: 1;
-}
-
-#sine-web-panels-backdrop[hidden],
 #sine-web-panels-edge[hidden],
 #sine-web-panels-resizer[hidden],
 #sine-web-panels-editor[hidden],
@@ -510,6 +496,12 @@ tab[sine-web-panel-tab="true"] {
 
 .browserSidebarContainer.sine-web-panels-parent-background {
   box-shadow: none !important;
+}
+
+/* Recess only the page behind a panel. Transparency composites with Zen's own
+   viewport surface, so the panel keeps a crisp edge without a black scrim. */
+.browserSidebarContainer.sine-web-panels-parent-background .browserContainer > browser {
+  opacity: 0.5;
 }
 
 .browserSidebarContainer.sine-web-panels-overlay {

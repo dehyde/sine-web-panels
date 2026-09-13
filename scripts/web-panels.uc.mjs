@@ -76,7 +76,6 @@ const ROOT_ID = "sine-web-panels-root";
 const RAIL_ID = "sine-web-panels-rail";
 const LIST_ID = "sine-web-panels-list";
 const ADD_BUTTON_ID = "sine-web-panels-add-button";
-const BACKDROP_ID = "sine-web-panels-backdrop";
 const MENU_ID = "sine-web-panels-menu";
 const EDITOR_ID = "sine-web-panels-editor";
 const TAB_MENU_ITEM_ID = "sine-web-panels-tab-context-add";
@@ -129,7 +128,6 @@ export class SineWebPanels {
   #rail;
   #list;
   #resizer;
-  #backdrop;
   #editor;
   #menu;
   #browserChrome;
@@ -260,7 +258,6 @@ export class SineWebPanels {
     });
     this.#syncDisplayWidth();
 
-    this.#backdrop = this.#el("div", { id: BACKDROP_ID, hidden: "true" });
     this.#resizer = this.#el("div", {
       id: RESIZER_ID,
       role: "separator",
@@ -304,7 +301,7 @@ export class SineWebPanels {
     this.#menu = this.#el("div", { id: MENU_ID, hidden: "true", role: "menu" });
 
     this.#finder = this.#buildFinder();
-    this.#root.append(this.#backdrop, this.#edge, this.#rail, this.#menu, this.#finder);
+    this.#root.append(this.#edge, this.#rail, this.#menu, this.#finder);
     this.#browserChrome.append(this.#root, this.#resizer);
     (this.document.getElementById("mainPopupSet") ?? this.#browserChrome).append(this.#editor);
     this.#mountTabContextMenuItem();
@@ -314,11 +311,6 @@ export class SineWebPanels {
     addButton.addEventListener("click", event => {
       event.stopPropagation();
       this.#openEditor({ mode: "add", anchor: addButton, insertIndex: this.#items.length });
-    }, { signal });
-    this.#backdrop.addEventListener("click", event => {
-      if (!this.#isPointInsideActivePanel(event.clientX, event.clientY)) {
-        this.#closePanel();
-      }
     }, { signal });
     this.#toggle.addEventListener("click", event => {
       event.stopPropagation();
@@ -873,7 +865,6 @@ export class SineWebPanels {
 
     this.#activeId = item.id;
     this.#activeParentTab = parentTab;
-    this.#backdrop.hidden = false;
     this.#resizer.hidden = false;
     this.#root.setAttribute("open", "true");
     this.#root.toggleAttribute("switching", switching);
@@ -916,7 +907,6 @@ export class SineWebPanels {
     this.#closeSurface();
     this.#activeId = null;
     this.#activeParentTab = null;
-    this.#backdrop.hidden = true;
     this.#resizer.hidden = true;
     this.#setResizeHover(false);
     this.#root.removeAttribute("active");
@@ -931,18 +921,13 @@ export class SineWebPanels {
     const panelBrowser = panelTab?.linkedBrowser;
     const parentContainer = parentBrowser?.closest(".browserSidebarContainer");
     const panelContainer = panelBrowser?.closest(".browserSidebarContainer");
-    const parentFrame = parentContainer?.querySelector(".browserContainer");
     const panelFrame = panelContainer?.querySelector(".browserContainer");
-    if (!parentBrowser || !panelBrowser || !parentContainer || !parentFrame || !panelContainer || !panelFrame) {
+    if (!parentBrowser || !panelBrowser || !parentContainer || !panelContainer || !panelFrame) {
       return false;
     }
 
     this.#closeSurface({ selectParent: false });
     parentContainer.classList.add("sine-web-panels-parent-background");
-    // The dim belongs to the tab's browser frame, rather than the broader tab
-    // container. This keeps Zen's tabs, toolbar and sidebar at their normal
-    // brightness while the entire background page is visually recessed.
-    parentFrame.append(this.#backdrop);
     panelContainer.classList.add("deck-selected", "sine-web-panels-overlay");
     panelFrame.append(this.#buildNavBar(), this.#resizer);
     panelBrowser.setAttribute("sine-web-panel-selected", "true");
@@ -1010,7 +995,6 @@ export class SineWebPanels {
     const { parentTab, panelTab, parentBrowser, panelBrowser, parentContainer, panelContainer } = this.#surfaceState;
     panelContainer.classList.remove("deck-selected", "sine-web-panels-overlay");
     parentContainer.classList.remove("sine-web-panels-parent-background");
-    this.#root?.append(this.#backdrop);
     panelBrowser.removeAttribute("sine-web-panel-selected");
     panelBrowser.zenModeActive = false;
     panelBrowser.docShellIsActive = false;
