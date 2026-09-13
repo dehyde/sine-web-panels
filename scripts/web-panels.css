@@ -167,25 +167,16 @@
 }
 
 #sine-web-panels-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 0;
   /* A small dim makes the panel read as the active surface without making the
      panel itself translucent or preventing the page behind it from working. */
   background: color-mix(in srgb, black 14%, transparent);
   pointer-events: none;
 }
 
-#sine-web-panels-root[side="right"] #sine-web-panels-backdrop {
-  inset-inline-end: calc(
-    var(--sine-web-panels-panel-offset) + var(--sine-web-panels-width)
-  );
-}
-
-#sine-web-panels-root[side="left"] #sine-web-panels-backdrop {
-  inset-inline-start: calc(
-    var(--sine-web-panels-panel-offset) + var(--sine-web-panels-width)
-  );
+.browserSidebarContainer.sine-web-panels-parent-background .browserContainer > #sine-web-panels-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
 }
 
 #sine-web-panels-backdrop[hidden],

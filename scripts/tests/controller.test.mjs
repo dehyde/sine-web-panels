@@ -345,6 +345,24 @@ test("opening a panel from the rail leaves it open, on its own tab", () => {
   );
 });
 
+test("the scrim belongs to the underlying tab's browser frame, not Zen chrome", () => {
+  const { app, ordinary } = mountWithPanels(["https://mail.example/"]);
+  const backdrop = app.el("backdrop");
+  const backgroundFrame = ordinary.linkedPanel.querySelector(".browserContainer");
+
+  railButton(app, "panel-1").dispatch("click");
+
+  assert.equal(backdrop.parentNode, backgroundFrame, "it covers the full background page");
+  assert.notEqual(backdrop.parentNode, app.root(), "it cannot dim Zen's surrounding interface");
+  assert.equal(backdrop.hidden, false, "the scrim is visible while the panel is open");
+
+  railButton(app, "panel-1").dispatch("click");
+  app.advance(100);
+
+  assert.equal(backdrop.parentNode, app.root(), "closing returns it to the controller");
+  assert.equal(backdrop.hidden, true);
+});
+
 test("switching panels moves the selection to the new panel's tab", () => {
   const { app, ordinary } = mountWithPanels(["https://mail.example/", "https://plane.example/app"]);
 

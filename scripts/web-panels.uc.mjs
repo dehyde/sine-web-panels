@@ -918,13 +918,18 @@ export class SineWebPanels {
     const panelBrowser = panelTab?.linkedBrowser;
     const parentContainer = parentBrowser?.closest(".browserSidebarContainer");
     const panelContainer = panelBrowser?.closest(".browserSidebarContainer");
+    const parentFrame = parentContainer?.querySelector(".browserContainer");
     const panelFrame = panelContainer?.querySelector(".browserContainer");
-    if (!parentBrowser || !panelBrowser || !parentContainer || !panelContainer || !panelFrame) {
+    if (!parentBrowser || !panelBrowser || !parentContainer || !parentFrame || !panelContainer || !panelFrame) {
       return false;
     }
 
     this.#closeSurface({ selectParent: false });
     parentContainer.classList.add("sine-web-panels-parent-background");
+    // The dim belongs to the tab's browser frame, rather than the broader tab
+    // container. This keeps Zen's tabs, toolbar and sidebar at their normal
+    // brightness while the entire background page is visually recessed.
+    parentFrame.append(this.#backdrop);
     panelContainer.classList.add("deck-selected", "sine-web-panels-overlay");
     panelFrame.append(this.#buildNavBar(), this.#resizer);
     panelBrowser.setAttribute("sine-web-panel-selected", "true");
@@ -992,6 +997,7 @@ export class SineWebPanels {
     const { parentTab, panelTab, parentBrowser, panelBrowser, parentContainer, panelContainer } = this.#surfaceState;
     panelContainer.classList.remove("deck-selected", "sine-web-panels-overlay");
     parentContainer.classList.remove("sine-web-panels-parent-background");
+    this.#root?.append(this.#backdrop);
     panelBrowser.removeAttribute("sine-web-panel-selected");
     panelBrowser.zenModeActive = false;
     panelBrowser.docShellIsActive = false;
