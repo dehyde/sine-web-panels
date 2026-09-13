@@ -131,7 +131,7 @@ test("rail item hover follows Zen's default toolbar button corner radius", () =>
 
 test("the page behind an open panel becomes translucent without a black scrim", () => {
   const viewport = rule(
-    ".browserSidebarContainer.sine-web-panels-parent-background .browserContainer > browser"
+    ".browserSidebarContainer.sine-web-panels-parent-background .browserContainer > .browserStack > browser"
   );
 
   assert.match(viewport, /opacity:\s*0\.5/);

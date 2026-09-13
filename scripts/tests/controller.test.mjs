@@ -431,6 +431,19 @@ test("opening a panel mounts back, forward, reload and home beside it", () => {
   assert.equal(nav.querySelector(".sine-web-panels-nav-forward").hidden, true);
 });
 
+test("pin becomes available after an eligible panel surface opens", () => {
+  const { app } = mountWithPanels(["https://mail.example/"]);
+  installSplitView(app);
+
+  railButton(app, "panel-1").dispatch("click");
+
+  assert.equal(
+    navOf(app).querySelector(".sine-web-panels-nav-pin").hidden,
+    false,
+    "the native split action appears once the panel knows its parent tab"
+  );
+});
+
 test("navigation order defaults to history first and updates from its setting", () => {
   const { app } = mountWithPanels(["https://mail.example/"]);
   railButton(app, "panel-1").dispatch("click");
@@ -622,6 +635,21 @@ test("home reloads the panel's configured URL and forgets where it drifted to", 
 
   assert.deepEqual(loads, ["https://mail.example/"]);
   assert.equal(JSON.parse(app.prefs.getStringPref("sine.web-panels.last-urls"))["panel-1"], undefined);
+});
+
+test("home hides history controls while it resets the panel", () => {
+  const { app } = mountWithPanels(["https://mail.example/"]);
+  railButton(app, "panel-1").dispatch("click");
+
+  const browser = app.window.gBrowser.selectedTab.linkedBrowser;
+  browser.canGoBack = true;
+  browser.canGoForward = true;
+  browser.loadURI = () => {};
+
+  navOf(app).querySelector(".sine-web-panels-nav-home").dispatch("click");
+
+  assert.equal(navOf(app).querySelector(".sine-web-panels-nav-back").hidden, true);
+  assert.equal(navOf(app).querySelector(".sine-web-panels-nav-forward").hidden, true);
 });
 
 test("reload refreshes the page the panel is on, without resetting it", () => {

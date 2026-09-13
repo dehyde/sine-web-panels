@@ -500,7 +500,7 @@ tab[sine-web-panel-tab="true"] {
 
 /* Recess only the page behind a panel. Transparency composites with Zen's own
    viewport surface, so the panel keeps a crisp edge without a black scrim. */
-.browserSidebarContainer.sine-web-panels-parent-background .browserContainer > browser {
+.browserSidebarContainer.sine-web-panels-parent-background .browserContainer > .browserStack > browser {
   opacity: 0.5;
 }
 

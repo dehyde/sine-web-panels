@@ -171,6 +171,8 @@ export class SineWebPanels {
   #navReload;
   #navHome;
   #navPin;
+  #homeResetPanelId = null;
+  #homeResetPageLoaded = false;
 
   constructor(windowRef) {
     this.window = windowRef;
@@ -335,6 +337,10 @@ export class SineWebPanels {
           return;
         }
 
+        if (this.#homeResetPanelId === panelId && this.#homeResetPageLoaded) {
+          this.#homeResetPanelId = null;
+          this.#homeResetPageLoaded = false;
+        }
         const item = this.#items.find(entry => entry.id === panelId);
         if (item) {
           this.#rememberLocation(item, browser);
@@ -865,6 +871,10 @@ export class SineWebPanels {
 
     this.#activeId = item.id;
     this.#activeParentTab = parentTab;
+    if (this.#homeResetPanelId !== item.id) {
+      this.#homeResetPanelId = null;
+      this.#homeResetPageLoaded = false;
+    }
     this.#resizer.hidden = false;
     this.#root.setAttribute("open", "true");
     this.#root.toggleAttribute("switching", switching);
@@ -874,6 +884,10 @@ export class SineWebPanels {
     this.#bindBrowserTitle(item, panelTab.linkedBrowser);
     this.#store.rememberTitle(item.id, panelTab.label);
     this.#syncUnreadFromTab(item.id);
+    // The bar is built while the surface is being attached, before #activeId
+    // and #surfaceState exist. Re-check once both are available so Split View
+    // is not incorrectly hidden on the first open.
+    this.#updateNavState();
     this.#render();
     this.window.setTimeout(() => {
       this.#root?.removeAttribute("switching");
@@ -904,6 +918,10 @@ export class SineWebPanels {
 
   #finishClosePanel() {
     this.#closeTimer = null;
+    if (this.#homeResetPanelId === this.#activeId) {
+      this.#homeResetPanelId = null;
+      this.#homeResetPageLoaded = false;
+    }
     this.#closeSurface();
     this.#activeId = null;
     this.#activeParentTab = null;
@@ -1147,6 +1165,13 @@ export class SineWebPanels {
     if (!target || !browser) {
       return;
     }
+    this.#homeResetPanelId = target.id;
+    this.#homeResetPageLoaded = false;
+    browser.addEventListener("load", () => {
+      if (this.#homeResetPanelId === target.id) {
+        this.#homeResetPageLoaded = true;
+      }
+    }, { once: true, signal: this.#abortController.signal });
     this.#store.forgetUrl(target.id);
     browser.loadURI(Services.io.newURI(target.url), {
       triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal(),
@@ -1173,8 +1198,9 @@ export class SineWebPanels {
       return;
     }
     const browser = this.#activePanelBrowser();
-    this.#navBack.hidden = !browser?.canGoBack;
-    this.#navForward.hidden = !browser?.canGoForward;
+    const resetHomeHistory = this.#homeResetPanelId === this.#activeId;
+    this.#navBack.hidden = resetHomeHistory || !browser?.canGoBack;
+    this.#navForward.hidden = resetHomeHistory || !browser?.canGoForward;
     this.#navPin.hidden = !this.#canPinPanelToSplitView();
   }
 
