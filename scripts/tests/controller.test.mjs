@@ -420,6 +420,19 @@ test("opening a panel mounts back, forward, reload and home beside it", () => {
   assert.equal(nav.querySelector(".sine-web-panels-nav-forward").disabled, true);
 });
 
+test("panel navigation buttons opt out of Zen's global squircle shape", () => {
+  const { app } = mountWithPanels(["https://mail.example/"]);
+
+  railButton(app, "panel-1").dispatch("click");
+
+  for (const button of navOf(app).querySelectorAll(".sine-web-panels-nav-button")) {
+    assert.ok(
+      button.classList.contains("no-squircles"),
+      "Zen's Glance controls stay circular even when the global squircle preference is on"
+    );
+  }
+});
+
 test("back and forward follow the panel browser's history", () => {
   const { app } = mountWithPanels(["https://mail.example/"]);
   railButton(app, "panel-1").dispatch("click");

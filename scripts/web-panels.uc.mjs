@@ -1243,7 +1243,7 @@ export class SineWebPanels {
 
     const mk = (name, label, handler) => {
       const button = this.#button({
-        className: `sine-web-panels-nav-button sine-web-panels-nav-${name}`,
+        className: `no-squircles sine-web-panels-nav-button sine-web-panels-nav-${name}`,
         title: label,
       });
       button.setAttribute("aria-label", label);
