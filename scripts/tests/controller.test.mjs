@@ -165,19 +165,31 @@ test("the peek is held open while a menu is up, so the rail cannot slide away", 
 test("fullscreen takes the rail off the screen and gives its strip back", () => {
   const app = mount();
 
-  app.setRootAttribute("inFullscreen", "true");
+  app.setRootAttribute("inDOMFullscreen", "true");
 
   assert.ok(app.root().hasAttribute("fullscreen"));
   assert.equal(app.browser.getAttribute("sine-web-panels-side"), null);
   assert.equal(app.appContent.style.has("margin-inline-end"), false);
 
-  app.setRootAttribute("inFullscreen", null);
+  app.setRootAttribute("inDOMFullscreen", null);
 
   assert.equal(app.root().hasAttribute("fullscreen"), false);
   assert.ok(
     app.browser.style.getPropertyValue("--sine-web-panels-reserved-inline-size"),
     "and puts it back afterwards"
   );
+});
+
+test("native window fullscreen keeps the rail and its reserved strip", () => {
+  const app = mount();
+
+  // Zen sets inFullscreen for native macOS/F11 fullscreen too. The rail is
+  // still browser chrome there, so it must remain available.
+  app.setRootAttribute("inFullscreen", "true");
+
+  assert.equal(app.root().hasAttribute("fullscreen"), false, "the rail stays rendered");
+  assert.equal(app.browser.getAttribute("sine-web-panels-side"), "right");
+  assert.ok(app.appContent.style.has("margin-inline-end"), "its strip stays reserved");
 });
 
 test("the rail moves when Zen's sidebar changes side", () => {
@@ -205,7 +217,7 @@ test("the configured shortcut toggles the rail", () => {
 
 test("the shortcut is dormant in fullscreen", () => {
   const app = mount();
-  app.setRootAttribute("inFullscreen", "true");
+  app.setRootAttribute("inDOMFullscreen", "true");
 
   app.document.dispatch("keydown", keydown("KeyB", { ctrlKey: true, altKey: true }));
 

@@ -89,11 +89,10 @@ const EDGE_ID = "sine-web-panels-edge";
 // out. Long enough to cross the gap to a panel button without chasing it.
 const PEEK_OUT_DELAY = 320;
 
-// Firefox stamps the chrome root when the window goes fullscreen: `inFullscreen`
-// for either flavour (F11 or a page/video calling requestFullscreen), and
-// `inDOMFullscreen` only for the content-driven one. Watching the attributes
-// rather than guessing at event names keeps this working across Zen versions.
-const FULLSCREEN_ATTRIBUTES = ["inFullscreen", "inDOMFullscreen"];
+// Zen's native window fullscreen uses `inFullscreen`, but its browser chrome
+// remains available there. `inDOMFullscreen` is reserved for a page or video
+// taking over the window, when the rail must get out of the way.
+const FULLSCREEN_ATTRIBUTES = ["inDOMFullscreen"];
 
 // Fired once the session's windows and their tabs are back.
 const SESSION_RESTORED_TOPIC = "sessionstore-windows-restored";
@@ -467,9 +466,9 @@ export class SineWebPanels {
       return;
     }
 
-    // Fullscreen belongs to the page, and a collapsed rail has no strip of
-    // window to reserve. Releasing here rather than only at the transition
-    // means every caller re-asserts the right layout.
+    // Content fullscreen belongs to the page, and a collapsed rail has no
+    // strip of window to reserve. Releasing here rather than only at the
+    // transition means every caller re-asserts the right layout.
     if (this.#fullscreen || this.#collapsed) {
       this.#releaseChromeLayout();
       return;
@@ -503,7 +502,8 @@ export class SineWebPanels {
 
   // Give the reserved inline space back to the content without forgetting how
   // wide the panel is. The margin is written inline with `!important`, so no
-  // stylesheet can override it — fullscreen has to take it off in script.
+  // stylesheet can override it — content fullscreen has to take it off in
+  // script.
   #releaseChromeLayout() {
     this.#browserChrome?.removeAttribute("sine-web-panels-side");
     this.document?.documentElement?.removeAttribute("sine-web-panels-side");
@@ -673,6 +673,8 @@ export class SineWebPanels {
 
   // The rail is browser chrome, so it has no business sitting on top of a
   // fullscreen video — and neither has the strip of window it reserves.
+  // Native window fullscreen is deliberately excluded: its chrome is still
+  // useful and should retain the rail.
   #observeFullscreen() {
     this.#fullscreenObserver = new this.window.MutationObserver(() =>
       this.#syncFullscreenState()
@@ -681,24 +683,12 @@ export class SineWebPanels {
       attributes: true,
       attributeFilter: FULLSCREEN_ATTRIBUTES,
     });
-    // The attribute is the source of truth, but the chrome-only `fullscreen`
-    // event fires on the window for F11 too, and catches the transition a tick
-    // earlier. Both funnel into the same idempotent sync.
-    this.window.addEventListener("fullscreen", () => this.#syncFullscreenState(), {
-      signal: this.#abortController.signal,
-      capture: true,
-    });
-    // Sine can hot-load the mod into a window that is already fullscreen.
+    // Sine can hot-load the mod while content is already fullscreen.
     this.#syncFullscreenState();
   }
 
   #isFullscreen() {
-    const root = this.document?.documentElement;
-    return Boolean(
-      root?.hasAttribute("inDOMFullscreen") ||
-      root?.hasAttribute("inFullscreen") ||
-      this.window.fullScreen
-    );
+    return this.document?.documentElement?.hasAttribute("inDOMFullscreen") === true;
   }
 
   #syncFullscreenState() {
@@ -2100,8 +2090,9 @@ export class SineWebPanels {
   };
 
   #onKeyDown = event => {
-    // Chrome is hidden in fullscreen, so the panel shortcuts stay dormant —
-    // otherwise Ctrl+Alt+1 would open an invisible panel over the video.
+    // Chrome is hidden in content fullscreen, so the panel shortcuts stay
+    // dormant — otherwise Ctrl+Alt+1 would open an invisible panel over the
+    // video.
     if (this.#fullscreen) {
       return;
     }
