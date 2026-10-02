@@ -764,6 +764,107 @@ test("reload refreshes the page the panel is on, without resetting it", () => {
 });
 
 // --------------------------------------------------------------------------
+// Escape typed into a panel's page belongs to the page first: Gmail's
+// attachment preview closes on it. Chrome sees the key before the page does,
+// so the panel waits for the escape frame script's verdict.
+// --------------------------------------------------------------------------
+
+const ESCAPE_MESSAGE = "SineWebPanels:Escape";
+
+function openPanelWithPage(urls = ["https://mail.example/"]) {
+  const { app } = mountWithPanels(urls);
+  railButton(app, "panel-1").dispatch("click");
+  const browser = app.window.gBrowser.selectedTab.linkedBrowser;
+  const isOpen = () => app.root().getAttribute("open") === "true";
+  const escapeInPage = () => app.document.dispatch("keydown", { key: "Escape", target: browser });
+  const verdict = consumed =>
+    app.window.messageManager.deliver(ESCAPE_MESSAGE, browser, { consumed });
+  return { app, browser, isOpen, escapeInPage, verdict };
+}
+
+test("Escape that closes the page's own preview leaves the panel open; the next one closes it", () => {
+  const { isOpen, escapeInPage, verdict } = openPanelWithPage();
+
+  escapeInPage();
+  assert.equal(isOpen(), true, "chrome must not act before the page has answered");
+  verdict(true);
+  assert.equal(isOpen(), true, "the page used Escape to close its preview");
+
+  escapeInPage();
+  verdict(false);
+  assert.equal(isOpen(), false, "nothing left in the page to close: the panel goes");
+});
+
+test("with no answer from the page the panel still closes, after the bounded wait", () => {
+  const { app, isOpen, escapeInPage } = openPanelWithPage();
+
+  escapeInPage();
+  app.advance(399);
+  assert.equal(isOpen(), true, "still waiting for the page");
+  app.advance(1);
+  assert.equal(isOpen(), false, "a page without the frame script behaves as before");
+});
+
+test("a late verdict after the timeout changes nothing", () => {
+  const { app, isOpen, escapeInPage, verdict } = openPanelWithPage();
+
+  escapeInPage();
+  app.advance(400);
+  assert.equal(isOpen(), false);
+  app.advance(100);
+  // Reopening must not be closed by the stale answer to the old key.
+  railButton(app, "panel-1").dispatch("click");
+  assert.equal(isOpen(), true);
+  verdict(false);
+  assert.equal(isOpen(), true);
+});
+
+test("Escape with focus in chrome closes the panel at once, without waiting", () => {
+  const { app, isOpen } = openPanelWithPage();
+
+  app.document.dispatch("keydown", { key: "Escape", target: app.root() });
+  assert.equal(isOpen(), false);
+});
+
+test("a verdict from another browser is ignored", () => {
+  const { app, isOpen, escapeInPage } = openPanelWithPage();
+  const other = app.addTab({ url: "https://other.example/" }).linkedBrowser;
+
+  escapeInPage();
+  app.window.messageManager.deliver(ESCAPE_MESSAGE, other, { consumed: false });
+  assert.equal(isOpen(), true, "only the open panel's page decides");
+});
+
+test("switching panels drops a pending Escape", () => {
+  const { app, isOpen, escapeInPage } = openPanelWithPage(["https://mail.example/", "https://plane.example/"]);
+
+  escapeInPage();
+  railButton(app, "panel-2").dispatch("click");
+  app.advance(400);
+  assert.equal(isOpen(), true, "the timer of the old panel's Escape must not close the new one");
+});
+
+test("the escape frame script goes into panel browsers only, once per frame loader", () => {
+  const { app, browser, escapeInPage } = openPanelWithPage();
+  const scripts = () => browser.messageManager.frameScripts.filter(url => url.endsWith("web-panels-escape-frame.js")).length;
+
+  assert.equal(scripts(), 1, "loaded when the panel opens");
+  railButton(app, "panel-1").dispatch("click");
+  app.advance(100);
+  railButton(app, "panel-1").dispatch("click");
+  assert.equal(scripts(), 1, "reopening on the same frame loader does not load it twice");
+
+  // A cross-process navigation gives the browser a new frame loader.
+  browser.frameLoader = {};
+  progress(app, browser).commit();
+  assert.equal(scripts(), 2, "the new process gets the script on its first commit");
+
+  const ordinary = app.window.gBrowser.tabs.find(tab => !tab.getAttribute("sine-web-panel-id"));
+  assert.equal(ordinary.linkedBrowser.messageManager.frameScripts.length, 0, "ordinary tabs never get it");
+  escapeInPage();
+});
+
+// --------------------------------------------------------------------------
 // Add is one field and one click; the name lives in Edit.
 // --------------------------------------------------------------------------
 

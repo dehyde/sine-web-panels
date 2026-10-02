@@ -393,6 +393,25 @@ export function createChromeWindow({ prefs = {}, viewportWidth = 1600 } = {}) {
   const window = {
     document,
     innerWidth: viewportWidth,
+    // The window message manager: frame scripts in every panel browser answer
+    // through it. `deliver` plays the part of a frame script's message.
+    messageManager: {
+      listeners: new Map(),
+      addMessageListener(name, listener) {
+        if (!this.listeners.has(name)) this.listeners.set(name, []);
+        this.listeners.get(name).push(listener);
+      },
+      removeMessageListener(name, listener) {
+        const list = this.listeners.get(name) ?? [];
+        const index = list.indexOf(listener);
+        if (index !== -1) list.splice(index, 1);
+      },
+      deliver(name, target, data) {
+        for (const listener of [...(this.listeners.get(name) ?? [])]) {
+          listener.receiveMessage({ name, target, data });
+        }
+      },
+    },
     innerHeight: 900,
     fullScreen: false,
     performance: { now: () => now },
@@ -469,6 +488,14 @@ export function createChromeWindow({ prefs = {}, viewportWidth = 1600 } = {}) {
         frame.classList.add("browserContainer");
         const linkedBrowser = new FakeElement("browser", document);
         linkedBrowser.currentURI = { spec: url };
+        // A frame loader per process; a cross-process navigation swaps it.
+        linkedBrowser.frameLoader = {};
+        linkedBrowser.messageManager = {
+          frameScripts: [],
+          loadFrameScript(scriptUrl) {
+            this.frameScripts.push(scriptUrl);
+          },
+        };
         frame.append(linkedBrowser);
         container.append(frame);
         this.tabpanels.append(container);

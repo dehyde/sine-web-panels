@@ -101,6 +101,17 @@ const PEEK_OUT_DELAY = 320;
 // taking over the window, when the rail must get out of the way.
 const FULLSCREEN_ATTRIBUTES = ["inDOMFullscreen"];
 
+// An Escape typed into a panel's page reaches chrome before the page sees it,
+// so whether the page used it (to close its own preview or dialog) is only
+// known in the content process. The escape frame script, loaded into panel
+// browsers only, reports that back; until it does, closing the panel waits.
+const ESCAPE_FRAME_SCRIPT = new URL("./web-panels-escape-frame.js", import.meta.url).href;
+const ESCAPE_MESSAGE = "SineWebPanels:Escape";
+// The frame script settles for 150 ms before answering. Bounds the wait when no
+// verdict comes back (a page loaded into a new process
+// since the script went in, a crashed tab); the panel then closes as before.
+const ESCAPE_REPLY_TIMEOUT = 400;
+
 // Fired once the session's windows and their tabs are back.
 const SESSION_RESTORED_TOPIC = "sessionstore-windows-restored";
 
@@ -184,6 +195,13 @@ export class SineWebPanels {
   // Phases, not a flag, because a STATE_STOP from the request Home aborted
   // can arrive before the reset page commits.
   #homeResetPhase = null;
+  #escapeTimer = null;
+  // Frame scripts live per frame loader; a cross-process navigation brings a
+  // new one, which needs the script again.
+  #escapeScriptLoaders = new WeakSet();
+  #escapeListener = {
+    receiveMessage: message => this.#onPageEscape(message.target, message.data),
+  };
 
   constructor(windowRef) {
     this.window = windowRef;
@@ -211,6 +229,8 @@ export class SineWebPanels {
 
   destroy() {
     this.#abortController.abort();
+    this.#cancelPendingEscape();
+    this.window.messageManager?.removeMessageListener(ESCAPE_MESSAGE, this.#escapeListener);
     this.#fullscreenObserver?.disconnect();
     this.#fullscreenObserver = null;
     this.#sidebarSideObserver?.disconnect();
@@ -340,6 +360,7 @@ export class SineWebPanels {
     this.window.addEventListener("resize", this.#onWindowResize, { signal });
     this.document.addEventListener("click", this.#onDocumentClick, { signal });
     this.document.addEventListener("keydown", this.#onKeyDown, { signal });
+    this.window.messageManager?.addMessageListener(ESCAPE_MESSAGE, this.#escapeListener);
     this.#tabsProgressListener = {
       onLocationChange: (browser, webProgress, _request, _location, _flags) => {
         const tab = this.window.gBrowser?.getTabForBrowser?.(browser);
@@ -365,6 +386,7 @@ export class SineWebPanels {
           this.#rememberLocation(item, browser);
         }
         if (panelId === this.#activeId) {
+          this.#ensureEscapeScript(browser);
           this.#updateNavState();
         }
       },
@@ -876,6 +898,7 @@ export class SineWebPanels {
   }
 
   #openPanel(item) {
+    this.#cancelPendingEscape();
     if (this.#fullscreen) {
       return;
     }
@@ -919,6 +942,7 @@ export class SineWebPanels {
   }
 
   #closePanel({ animate = true } = {}) {
+    this.#cancelPendingEscape();
     if (!this.#activeId) {
       return;
     }
@@ -972,6 +996,7 @@ export class SineWebPanels {
     panelContainer.classList.add("deck-selected", "sine-web-panels-overlay");
     panelFrame.append(this.#buildNavBar(), this.#resizer);
     panelBrowser.setAttribute("sine-web-panel-selected", "true");
+    this.#ensureEscapeScript(panelBrowser);
     parentBrowser.zenModeActive = true;
     parentBrowser.docShellIsActive = true;
     panelBrowser.zenModeActive = true;
@@ -2117,6 +2142,36 @@ export class SineWebPanels {
     }
   };
 
+  #onPageEscape(browser, verdict) {
+    if (this.#escapeTimer === null || browser !== this.#activePanelBrowser()) {
+      return;
+    }
+    this.#cancelPendingEscape();
+    if (!verdict?.consumed) {
+      this.#closePanel();
+    }
+  }
+
+  #ensureEscapeScript(browser) {
+    const loader = browser?.frameLoader;
+    if (!loader || this.#escapeScriptLoaders.has(loader)) {
+      return;
+    }
+    try {
+      browser.messageManager?.loadFrameScript(ESCAPE_FRAME_SCRIPT, false);
+      this.#escapeScriptLoaders.add(loader);
+    } catch (error) {
+      console.warn("[Web Panels] Could not load the Escape frame script.", error);
+    }
+  }
+
+  #cancelPendingEscape() {
+    if (this.#escapeTimer !== null) {
+      this.window.clearTimeout(this.#escapeTimer);
+      this.#escapeTimer = null;
+    }
+  }
+
   #onKeyDown = event => {
     // Chrome is hidden in content fullscreen, so the panel shortcuts stay
     // dormant — otherwise Ctrl+Alt+1 would open an invisible panel over the
@@ -2133,6 +2188,16 @@ export class SineWebPanels {
       }
       this.#closeMenu();
       this.#closeEditor();
+      const browser = this.#activePanelBrowser();
+      if (browser && event.target === browser) {
+        // Typed into the panel's page: the page may be closing its own
+        // preview with it. Wait for the escape actor's verdict.
+        this.#escapeTimer ??= this.window.setTimeout(() => {
+          this.#escapeTimer = null;
+          this.#closePanel();
+        }, ESCAPE_REPLY_TIMEOUT);
+        return;
+      }
       this.#closePanel();
       return;
     }
