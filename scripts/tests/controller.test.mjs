@@ -664,6 +664,61 @@ test("home hides history controls while it resets the panel", () => {
   assert.equal(navOf(app).querySelector(".sine-web-panels-nav-forward").hidden, true);
 });
 
+// A remote <browser> never fires `load` in the parent, so the reset has to
+// be driven by the tabs progress listener, the way Zen delivers it.
+const STATE_STOP_WINDOW = 0x10 | 0x80000;
+
+function progress(app, browser) {
+  const listeners = app.window.gBrowser.progressListeners;
+  return {
+    commit({ isTopLevel = true } = {}) {
+      listeners.forEach(l => l.onLocationChange?.(browser, { isTopLevel }, null, browser.currentURI, 0));
+    },
+    stop() {
+      listeners.forEach(l => l.onStateChange?.(browser, { isTopLevel: true }, null, STATE_STOP_WINDOW, 0));
+    },
+  };
+}
+
+test("history controls come back once the user navigates away from the reset page", () => {
+  const { app } = mountWithPanels(["https://mail.example/"]);
+  railButton(app, "panel-1").dispatch("click");
+
+  const browser = app.window.gBrowser.selectedTab.linkedBrowser;
+  browser.canGoBack = true;
+  browser.canGoForward = false;
+  browser.loadURI = () => {};
+  const back = () => navOf(app).querySelector(".sine-web-panels-nav-back");
+  const wire = progress(app, browser);
+
+  navOf(app).querySelector(".sine-web-panels-nav-home").dispatch("click");
+  wire.commit();
+  wire.stop();
+  assert.equal(back().hidden, true, "still hidden on the freshly reset page");
+
+  wire.commit({ isTopLevel: false });
+  assert.equal(back().hidden, true, "an iframe loading inside the reset page is not the user navigating");
+
+  wire.commit();
+  assert.equal(back().hidden, false, "the next navigation brings Back back");
+});
+
+test("a stop from the request Home aborted does not end the reset early", () => {
+  const { app } = mountWithPanels(["https://mail.example/"]);
+  railButton(app, "panel-1").dispatch("click");
+
+  const browser = app.window.gBrowser.selectedTab.linkedBrowser;
+  browser.canGoBack = true;
+  browser.loadURI = () => {};
+  const back = () => navOf(app).querySelector(".sine-web-panels-nav-back");
+  const wire = progress(app, browser);
+
+  navOf(app).querySelector(".sine-web-panels-nav-home").dispatch("click");
+  wire.stop();
+  wire.commit();
+  assert.equal(back().hidden, true, "the reset page itself committing must not reveal Back");
+});
+
 test("reload refreshes the page the panel is on, without resetting it", () => {
   const { app } = mountWithPanels(["https://mail.example/"]);
   app.prefs.setStringPref("sine.web-panels.last-urls", JSON.stringify({ "panel-1": "https://mail.example/thread/7" }));

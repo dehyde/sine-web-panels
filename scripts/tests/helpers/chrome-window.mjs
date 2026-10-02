@@ -483,9 +483,16 @@ export function createChromeWindow({ prefs = {}, viewportWidth = 1600 } = {}) {
         const index = this.tabs.indexOf(tab);
         if (index !== -1) this.tabs.splice(index, 1);
       },
-      addTabsProgressListener() {},
-      removeTabsProgressListener() {},
-      getTabForBrowser: () => null,
+      progressListeners: [],
+      addTabsProgressListener(listener) {
+        this.progressListeners.push(listener);
+      },
+      removeTabsProgressListener(listener) {
+        this.progressListeners = this.progressListeners.filter(entry => entry !== listener);
+      },
+      getTabForBrowser(browser) {
+        return this.tabs.find(tab => tab.linkedBrowser === browser) ?? null;
+      },
     },
   };
 

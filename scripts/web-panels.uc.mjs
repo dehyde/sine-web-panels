@@ -85,6 +85,13 @@ const TOGGLE_ID = "sine-web-panels-toggle";
 const RAIL_SEPARATOR_ID = "sine-web-panels-rail-separator";
 const EDGE_ID = "sine-web-panels-edge";
 
+// nsIWebProgressListener flags. A top-level document finishing its load is
+// STATE_STOP | STATE_IS_WINDOW. Measured on Zen 1.22.3b (2026-10-02): a
+// remote <browser> never receives a `load` event in the parent process — zero
+// across a full reload — so the progress listener is the only signal.
+const STATE_STOP = 0x10;
+const STATE_IS_WINDOW = 0x80000;
+
 // How long the peeked rail waits after the pointer leaves before sliding back
 // out. Long enough to cross the gap to a panel button without chasing it.
 const PEEK_OUT_DELAY = 320;
@@ -171,7 +178,12 @@ export class SineWebPanels {
   #navHome;
   #navPin;
   #homeResetPanelId = null;
-  #homeResetPageLoaded = false;
+  // After Home the history buttons stay hidden until the user navigates
+  // away from the reset page: "navigating" until its location commits,
+  // "arrived" until it finishes loading, "loaded" until the next location.
+  // Phases, not a flag, because a STATE_STOP from the request Home aborted
+  // can arrive before the reset page commits.
+  #homeResetPhase = null;
 
   constructor(windowRef) {
     this.window = windowRef;
@@ -329,16 +341,24 @@ export class SineWebPanels {
     this.document.addEventListener("click", this.#onDocumentClick, { signal });
     this.document.addEventListener("keydown", this.#onKeyDown, { signal });
     this.#tabsProgressListener = {
-      onLocationChange: (browser, _webProgress, _request, _location, _flags) => {
+      onLocationChange: (browser, webProgress, _request, _location, _flags) => {
         const tab = this.window.gBrowser?.getTabForBrowser?.(browser);
         const panelId = tab?.getAttribute?.("sine-web-panel-id");
         if (!panelId) {
           return;
         }
 
-        if (this.#homeResetPanelId === panelId && this.#homeResetPageLoaded) {
-          this.#homeResetPanelId = null;
-          this.#homeResetPageLoaded = false;
+        // Only the panel's own document moves the reset along. Measured on
+        // Google (2026-10-02): an account-widget iframe commits right after
+        // the top-level STATE_STOP, which would otherwise read as the user
+        // navigating away.
+        if (this.#homeResetPanelId === panelId && webProgress?.isTopLevel !== false) {
+          if (this.#homeResetPhase === "loaded") {
+            this.#homeResetPanelId = null;
+            this.#homeResetPhase = null;
+          } else if (this.#homeResetPhase === "navigating") {
+            this.#homeResetPhase = "arrived";
+          }
         }
         const item = this.#items.find(entry => entry.id === panelId);
         if (item) {
@@ -346,6 +366,19 @@ export class SineWebPanels {
         }
         if (panelId === this.#activeId) {
           this.#updateNavState();
+        }
+      },
+      onStateChange: (browser, webProgress, _request, stateFlags) => {
+        if (
+          this.#homeResetPhase !== "arrived" ||
+          !webProgress?.isTopLevel ||
+          (stateFlags & (STATE_STOP | STATE_IS_WINDOW)) !== (STATE_STOP | STATE_IS_WINDOW)
+        ) {
+          return;
+        }
+        const tab = this.window.gBrowser?.getTabForBrowser?.(browser);
+        if (tab?.getAttribute?.("sine-web-panel-id") === this.#homeResetPanelId) {
+          this.#homeResetPhase = "loaded";
         }
       },
     };
@@ -863,7 +896,7 @@ export class SineWebPanels {
     this.#activeParentTab = parentTab;
     if (this.#homeResetPanelId !== item.id) {
       this.#homeResetPanelId = null;
-      this.#homeResetPageLoaded = false;
+      this.#homeResetPhase = null;
     }
     this.#resizer.hidden = false;
     this.#root.setAttribute("open", "true");
@@ -910,7 +943,7 @@ export class SineWebPanels {
     this.#closeTimer = null;
     if (this.#homeResetPanelId === this.#activeId) {
       this.#homeResetPanelId = null;
-      this.#homeResetPageLoaded = false;
+      this.#homeResetPhase = null;
     }
     this.#closeSurface();
     this.#activeId = null;
@@ -1156,12 +1189,7 @@ export class SineWebPanels {
       return;
     }
     this.#homeResetPanelId = target.id;
-    this.#homeResetPageLoaded = false;
-    browser.addEventListener("load", () => {
-      if (this.#homeResetPanelId === target.id) {
-        this.#homeResetPageLoaded = true;
-      }
-    }, { once: true, signal: this.#abortController.signal });
+    this.#homeResetPhase = "navigating";
     this.#store.forgetUrl(target.id);
     browser.loadURI(Services.io.newURI(target.url), {
       triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal(),
