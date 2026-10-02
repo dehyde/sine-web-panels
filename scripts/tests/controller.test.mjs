@@ -386,6 +386,30 @@ test("the underlying tab is marked for viewport transparency without adding a sc
   assert.equal(ordinary.linkedPanel.classList.contains("sine-web-panels-parent-background"), false);
 });
 
+test("only the page behind is dimmed — never the panel, not even after switching panels", () => {
+  const { app, ordinary } = mountWithPanels(["https://mail.example/", "https://plane.example/app"]);
+  // Compare labels, never the tab objects: a failing deepEqual on fake tabs
+  // serialises the whole circular fake DOM and ran WSL out of memory
+  // (2026-10-02).
+  const label = tab => tab.getAttribute("sine-web-panel-id") ?? "ordinary";
+  const dimmed = () =>
+    [...app.window.gBrowser.tabs]
+      .filter(tab => tab.linkedPanel.classList.contains("sine-web-panels-parent-background"))
+      .map(label);
+
+  railButton(app, "panel-1").dispatch("click");
+  assert.deepEqual(dimmed(), [label(ordinary)], "exactly one dimmed container: the parent tab's");
+
+  railButton(app, "panel-2").dispatch("click");
+  app.advance(100);
+  assert.deepEqual(dimmed(), [label(ordinary)], "the switch neither dims a panel nor drops the parent's dimming");
+  assert.equal(
+    app.window.gBrowser.selectedTab.linkedPanel.classList.contains("sine-web-panels-parent-background"),
+    false,
+    "the visible panel is drawn at full opacity"
+  );
+});
+
 test("switching panels moves the selection to the new panel's tab", () => {
   const { app, ordinary } = mountWithPanels(["https://mail.example/", "https://plane.example/app"]);
 

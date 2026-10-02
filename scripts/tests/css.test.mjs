@@ -142,6 +142,9 @@ test("the page behind an open panel becomes translucent without a black scrim", 
   );
 
   assert.match(viewport, /opacity:\s*0\.5/);
+  // The panel's own container carries .sine-web-panels-overlay, never the
+  // parent-background hook, so no rule may dim the overlay itself.
+  assert.doesNotMatch(css, /\.sine-web-panels-overlay[^{]*\{[^}]*opacity:\s*0\.\d/);
   assert.doesNotMatch(css, /#sine-web-panels-backdrop/);
   assert.doesNotMatch(css, /color-mix\(in srgb, black 50%, transparent\)/);
 });
