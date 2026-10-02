@@ -828,7 +828,10 @@ tab[sine-web-panel-tab="true"] {
   color: var(--toolbarbutton-icon-fill, FieldText);
   border: 0;
   box-shadow: none;
-  pointer-events: auto;
+  /* The column spans the panel's full height so the pin can sit at the
+     bottom, but between the buttons it is empty page. Only the buttons may
+     take the pointer, or that strip swallows the page's clicks and wheel. */
+  pointer-events: none;
 }
 
 :root[sine-web-panels-side="right"] .sine-web-panels-nav {
@@ -870,6 +873,7 @@ tab[sine-web-panel-tab="true"] {
   opacity: 1 !important;
   -moz-context-properties: fill;
   box-shadow: 0 0 12px 1px rgba(0, 0, 0, 0.07);
+  pointer-events: auto;
   transition:
     background 0.05s ease,
     scale 0.05s ease;
