@@ -624,7 +624,7 @@ test("back and forward follow the panel browser's history", () => {
   assert.equal(nav.querySelector(".sine-web-panels-nav-back").hidden, false);
 });
 
-test("the section-key shortcut advances panels, skips separators, and wraps", () => {
+test("the Backquote shortcut advances panels across keyboard layouts, skips separators, and wraps", () => {
   const app = mount({
     prefs: {
       [PREFS.items]: JSON.stringify([
@@ -636,21 +636,21 @@ test("the section-key shortcut advances panels, skips separators, and wraps", ()
   });
   app.addTab({ url: "https://plane.example/", select: true });
 
-  app.document.dispatch("keydown", keydown("IntlBackslash", {
+  app.document.dispatch("keydown", keydown("Backquote", {
     ctrlKey: true,
     altKey: true,
-    key: "§",
+    key: "~",
   }));
   assert.equal(app.root().getAttribute("active"), "panel-1", "none open starts at the first panel");
 
-  app.document.dispatch("keydown", keydown("IntlBackslash", {
+  app.document.dispatch("keydown", keydown("Backquote", {
     ctrlKey: true,
     altKey: true,
-    key: "±",
+    key: "`",
   }));
-  assert.equal(app.root().getAttribute("active"), "panel-2", "the alternate section glyph advances too");
+  assert.equal(app.root().getAttribute("active"), "panel-2", "the same physical key advances on another layout");
 
-  app.document.dispatch("keydown", keydown("IntlBackslash", {
+  app.document.dispatch("keydown", keydown("Backquote", {
     ctrlKey: true,
     altKey: true,
     key: "§",
