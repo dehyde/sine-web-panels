@@ -1,6 +1,7 @@
 import { WebPanelsRuntime } from "./web-panels-runtime.uc.mjs";
 import {
   MIN_PANEL_WIDTH,
+  NAVIGATION_ORDER_HOME_FIRST,
   PANEL_TYPE,
   SEPARATOR_TYPE,
   WebPanelsStore,
@@ -75,24 +76,41 @@ const ROOT_ID = "sine-web-panels-root";
 const RAIL_ID = "sine-web-panels-rail";
 const LIST_ID = "sine-web-panels-list";
 const ADD_BUTTON_ID = "sine-web-panels-add-button";
-const BACKDROP_ID = "sine-web-panels-backdrop";
 const MENU_ID = "sine-web-panels-menu";
 const EDITOR_ID = "sine-web-panels-editor";
 const TAB_MENU_ITEM_ID = "sine-web-panels-tab-context-add";
 const RESIZER_ID = "sine-web-panels-resizer";
 const FINDER_ID = "sine-web-panels-finder";
 const TOGGLE_ID = "sine-web-panels-toggle";
+const RAIL_SEPARATOR_ID = "sine-web-panels-rail-separator";
 const EDGE_ID = "sine-web-panels-edge";
+
+// nsIWebProgressListener flags. A top-level document finishing its load is
+// STATE_STOP | STATE_IS_WINDOW. Measured on Zen 1.22.3b (2026-10-02): a
+// remote <browser> never receives a `load` event in the parent process — zero
+// across a full reload — so the progress listener is the only signal.
+const STATE_STOP = 0x10;
+const STATE_IS_WINDOW = 0x80000;
 
 // How long the peeked rail waits after the pointer leaves before sliding back
 // out. Long enough to cross the gap to a panel button without chasing it.
 const PEEK_OUT_DELAY = 320;
 
-// Firefox stamps the chrome root when the window goes fullscreen: `inFullscreen`
-// for either flavour (F11 or a page/video calling requestFullscreen), and
-// `inDOMFullscreen` only for the content-driven one. Watching the attributes
-// rather than guessing at event names keeps this working across Zen versions.
-const FULLSCREEN_ATTRIBUTES = ["inFullscreen", "inDOMFullscreen"];
+// Zen's native window fullscreen uses `inFullscreen`, but its browser chrome
+// remains available there. `inDOMFullscreen` is reserved for a page or video
+// taking over the window, when the rail must get out of the way.
+const FULLSCREEN_ATTRIBUTES = ["inDOMFullscreen"];
+
+// An Escape typed into a panel's page reaches chrome before the page sees it,
+// so whether the page used it (to close its own preview or dialog) is only
+// known in the content process. The escape frame script, loaded into panel
+// browsers only, reports that back; until it does, closing the panel waits.
+const ESCAPE_FRAME_SCRIPT = new URL("./web-panels-escape-frame.js", import.meta.url).href;
+const ESCAPE_MESSAGE = "SineWebPanels:Escape";
+// The frame script settles for 150 ms before answering. Bounds the wait when no
+// verdict comes back (a page loaded into a new process
+// since the script went in, a crashed tab); the panel then closes as before.
+const ESCAPE_REPLY_TIMEOUT = 400;
 
 // Fired once the session's windows and their tabs are back.
 const SESSION_RESTORED_TOPIC = "sessionstore-windows-restored";
@@ -127,7 +145,6 @@ export class SineWebPanels {
   #rail;
   #list;
   #resizer;
-  #backdrop;
   #editor;
   #menu;
   #browserChrome;
@@ -170,6 +187,21 @@ export class SineWebPanels {
   #navForward;
   #navReload;
   #navHome;
+  #navPin;
+  #homeResetPanelId = null;
+  // After Home the history buttons stay hidden until the user navigates
+  // away from the reset page: "navigating" until its location commits,
+  // "arrived" until it finishes loading, "loaded" until the next location.
+  // Phases, not a flag, because a STATE_STOP from the request Home aborted
+  // can arrive before the reset page commits.
+  #homeResetPhase = null;
+  #escapeTimer = null;
+  // Frame scripts live per frame loader; a cross-process navigation brings a
+  // new one, which needs the script again.
+  #escapeScriptLoaders = new WeakSet();
+  #escapeListener = {
+    receiveMessage: message => this.#onPageEscape(message.target, message.data),
+  };
 
   constructor(windowRef) {
     this.window = windowRef;
@@ -197,6 +229,8 @@ export class SineWebPanels {
 
   destroy() {
     this.#abortController.abort();
+    this.#cancelPendingEscape();
+    this.window.messageManager?.removeMessageListener(ESCAPE_MESSAGE, this.#escapeListener);
     this.#fullscreenObserver?.disconnect();
     this.#fullscreenObserver = null;
     this.#sidebarSideObserver?.disconnect();
@@ -218,6 +252,7 @@ export class SineWebPanels {
     if (this.#prefObserver) {
       Services.prefs.removeObserver(WebPanelsStore.prefs.enabled, this.#prefObserver);
       Services.prefs.removeObserver(WebPanelsStore.prefs.resizerColor, this.#prefObserver);
+      Services.prefs.removeObserver(WebPanelsStore.prefs.navigationOrder, this.#prefObserver);
     }
     if (this.#tabsProgressListener) {
       this.window.gBrowser?.removeTabsProgressListener?.(this.#tabsProgressListener);
@@ -256,7 +291,6 @@ export class SineWebPanels {
     });
     this.#syncDisplayWidth();
 
-    this.#backdrop = this.#el("div", { id: BACKDROP_ID, hidden: "true" });
     this.#resizer = this.#el("div", {
       id: RESIZER_ID,
       role: "separator",
@@ -275,6 +309,12 @@ export class SineWebPanels {
       id: TOGGLE_ID,
       className: "sine-web-panels-toggle",
     });
+    const railSeparator = this.#el("div", {
+      id: RAIL_SEPARATOR_ID,
+      role: "separator",
+      "aria-orientation": "horizontal",
+      "aria-label": "Web Panels rail separator",
+    });
     const addButton = this.#button({
       id: ADD_BUTTON_ID,
       label: "",
@@ -282,7 +322,7 @@ export class SineWebPanels {
       className: "sine-web-panels-add-button",
     });
     addButton.setAttribute("aria-label", "New Web Panel");
-    this.#rail.append(this.#toggle, this.#list, addButton);
+    this.#rail.append(this.#toggle, railSeparator, this.#list, addButton);
 
     // The strip the pointer has to reach to bring a collapsed rail back. It is
     // an element rather than a pointermove test on the window because chrome
@@ -294,7 +334,7 @@ export class SineWebPanels {
     this.#menu = this.#el("div", { id: MENU_ID, hidden: "true", role: "menu" });
 
     this.#finder = this.#buildFinder();
-    this.#root.append(this.#backdrop, this.#edge, this.#rail, this.#menu, this.#finder);
+    this.#root.append(this.#edge, this.#rail, this.#menu, this.#finder);
     this.#browserChrome.append(this.#root, this.#resizer);
     (this.document.getElementById("mainPopupSet") ?? this.#browserChrome).append(this.#editor);
     this.#mountTabContextMenuItem();
@@ -304,11 +344,6 @@ export class SineWebPanels {
     addButton.addEventListener("click", event => {
       event.stopPropagation();
       this.#openEditor({ mode: "add", anchor: addButton, insertIndex: this.#items.length });
-    }, { signal });
-    this.#backdrop.addEventListener("click", event => {
-      if (!this.#isPointInsideActivePanel(event.clientX, event.clientY)) {
-        this.#closePanel();
-      }
     }, { signal });
     this.#toggle.addEventListener("click", event => {
       event.stopPropagation();
@@ -325,20 +360,47 @@ export class SineWebPanels {
     this.window.addEventListener("resize", this.#onWindowResize, { signal });
     this.document.addEventListener("click", this.#onDocumentClick, { signal });
     this.document.addEventListener("keydown", this.#onKeyDown, { signal });
+    this.window.messageManager?.addMessageListener(ESCAPE_MESSAGE, this.#escapeListener);
     this.#tabsProgressListener = {
-      onLocationChange: (browser, _webProgress, _request, _location, _flags) => {
+      onLocationChange: (browser, webProgress, _request, _location, _flags) => {
         const tab = this.window.gBrowser?.getTabForBrowser?.(browser);
         const panelId = tab?.getAttribute?.("sine-web-panel-id");
         if (!panelId) {
           return;
         }
 
+        // Only the panel's own document moves the reset along. Measured on
+        // Google (2026-10-02): an account-widget iframe commits right after
+        // the top-level STATE_STOP, which would otherwise read as the user
+        // navigating away.
+        if (this.#homeResetPanelId === panelId && webProgress?.isTopLevel !== false) {
+          if (this.#homeResetPhase === "loaded") {
+            this.#homeResetPanelId = null;
+            this.#homeResetPhase = null;
+          } else if (this.#homeResetPhase === "navigating") {
+            this.#homeResetPhase = "arrived";
+          }
+        }
         const item = this.#items.find(entry => entry.id === panelId);
         if (item) {
           this.#rememberLocation(item, browser);
         }
         if (panelId === this.#activeId) {
+          this.#ensureEscapeScript(browser);
           this.#updateNavState();
+        }
+      },
+      onStateChange: (browser, webProgress, _request, stateFlags) => {
+        if (
+          this.#homeResetPhase !== "arrived" ||
+          !webProgress?.isTopLevel ||
+          (stateFlags & (STATE_STOP | STATE_IS_WINDOW)) !== (STATE_STOP | STATE_IS_WINDOW)
+        ) {
+          return;
+        }
+        const tab = this.window.gBrowser?.getTabForBrowser?.(browser);
+        if (tab?.getAttribute?.("sine-web-panel-id") === this.#homeResetPanelId) {
+          this.#homeResetPhase = "loaded";
         }
       },
     };
@@ -417,6 +479,8 @@ export class SineWebPanels {
           this.#applyEnabledState();
         } else if (prefName === WebPanelsStore.prefs.resizerColor) {
           this.#applyResizerColor();
+        } else if (prefName === WebPanelsStore.prefs.navigationOrder) {
+          this.#syncNavigationOrder();
         }
       },
     };
@@ -426,6 +490,7 @@ export class SineWebPanels {
     Services.prefs.addObserver(WebPanelsStore.prefs.enabled, this.#prefObserver);
     // Unlike `collapsed`, this one is appearance and belongs to every window.
     Services.prefs.addObserver(WebPanelsStore.prefs.resizerColor, this.#prefObserver);
+    Services.prefs.addObserver(WebPanelsStore.prefs.navigationOrder, this.#prefObserver);
   }
 
   #applyEnabledState() {
@@ -456,9 +521,9 @@ export class SineWebPanels {
       return;
     }
 
-    // Fullscreen belongs to the page, and a collapsed rail has no strip of
-    // window to reserve. Releasing here rather than only at the transition
-    // means every caller re-asserts the right layout.
+    // Content fullscreen belongs to the page, and a collapsed rail has no
+    // strip of window to reserve. Releasing here rather than only at the
+    // transition means every caller re-asserts the right layout.
     if (this.#fullscreen || this.#collapsed) {
       this.#releaseChromeLayout();
       return;
@@ -492,7 +557,8 @@ export class SineWebPanels {
 
   // Give the reserved inline space back to the content without forgetting how
   // wide the panel is. The margin is written inline with `!important`, so no
-  // stylesheet can override it — fullscreen has to take it off in script.
+  // stylesheet can override it — content fullscreen has to take it off in
+  // script.
   #releaseChromeLayout() {
     this.#browserChrome?.removeAttribute("sine-web-panels-side");
     this.document?.documentElement?.removeAttribute("sine-web-panels-side");
@@ -662,6 +728,8 @@ export class SineWebPanels {
 
   // The rail is browser chrome, so it has no business sitting on top of a
   // fullscreen video — and neither has the strip of window it reserves.
+  // Native window fullscreen is deliberately excluded: its chrome is still
+  // useful and should retain the rail.
   #observeFullscreen() {
     this.#fullscreenObserver = new this.window.MutationObserver(() =>
       this.#syncFullscreenState()
@@ -670,24 +738,12 @@ export class SineWebPanels {
       attributes: true,
       attributeFilter: FULLSCREEN_ATTRIBUTES,
     });
-    // The attribute is the source of truth, but the chrome-only `fullscreen`
-    // event fires on the window for F11 too, and catches the transition a tick
-    // earlier. Both funnel into the same idempotent sync.
-    this.window.addEventListener("fullscreen", () => this.#syncFullscreenState(), {
-      signal: this.#abortController.signal,
-      capture: true,
-    });
-    // Sine can hot-load the mod into a window that is already fullscreen.
+    // Sine can hot-load the mod while content is already fullscreen.
     this.#syncFullscreenState();
   }
 
   #isFullscreen() {
-    const root = this.document?.documentElement;
-    return Boolean(
-      root?.hasAttribute("inDOMFullscreen") ||
-      root?.hasAttribute("inFullscreen") ||
-      this.window.fullScreen
-    );
+    return this.document?.documentElement?.hasAttribute("inDOMFullscreen") === true;
   }
 
   #syncFullscreenState() {
@@ -842,6 +898,7 @@ export class SineWebPanels {
   }
 
   #openPanel(item) {
+    this.#cancelPendingEscape();
     if (this.#fullscreen) {
       return;
     }
@@ -860,7 +917,10 @@ export class SineWebPanels {
 
     this.#activeId = item.id;
     this.#activeParentTab = parentTab;
-    this.#backdrop.hidden = false;
+    if (this.#homeResetPanelId !== item.id) {
+      this.#homeResetPanelId = null;
+      this.#homeResetPhase = null;
+    }
     this.#resizer.hidden = false;
     this.#root.setAttribute("open", "true");
     this.#root.toggleAttribute("switching", switching);
@@ -870,6 +930,10 @@ export class SineWebPanels {
     this.#bindBrowserTitle(item, panelTab.linkedBrowser);
     this.#store.rememberTitle(item.id, panelTab.label);
     this.#syncUnreadFromTab(item.id);
+    // The bar is built while the surface is being attached, before #activeId
+    // and #surfaceState exist. Re-check once both are available so Split View
+    // is not incorrectly hidden on the first open.
+    this.#updateNavState();
     this.#render();
     this.window.setTimeout(() => {
       this.#root?.removeAttribute("switching");
@@ -878,6 +942,7 @@ export class SineWebPanels {
   }
 
   #closePanel({ animate = true } = {}) {
+    this.#cancelPendingEscape();
     if (!this.#activeId) {
       return;
     }
@@ -900,10 +965,13 @@ export class SineWebPanels {
 
   #finishClosePanel() {
     this.#closeTimer = null;
+    if (this.#homeResetPanelId === this.#activeId) {
+      this.#homeResetPanelId = null;
+      this.#homeResetPhase = null;
+    }
     this.#closeSurface();
     this.#activeId = null;
     this.#activeParentTab = null;
-    this.#backdrop.hidden = true;
     this.#resizer.hidden = true;
     this.#setResizeHover(false);
     this.#root.removeAttribute("active");
@@ -928,6 +996,7 @@ export class SineWebPanels {
     panelContainer.classList.add("deck-selected", "sine-web-panels-overlay");
     panelFrame.append(this.#buildNavBar(), this.#resizer);
     panelBrowser.setAttribute("sine-web-panel-selected", "true");
+    this.#ensureEscapeScript(panelBrowser);
     parentBrowser.zenModeActive = true;
     parentBrowser.docShellIsActive = true;
     panelBrowser.zenModeActive = true;
@@ -1144,6 +1213,8 @@ export class SineWebPanels {
     if (!target || !browser) {
       return;
     }
+    this.#homeResetPanelId = target.id;
+    this.#homeResetPhase = "navigating";
     this.#store.forgetUrl(target.id);
     browser.loadURI(Services.io.newURI(target.url), {
       triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal(),
@@ -1170,8 +1241,95 @@ export class SineWebPanels {
       return;
     }
     const browser = this.#activePanelBrowser();
-    this.#navBack.disabled = !browser?.canGoBack;
-    this.#navForward.disabled = !browser?.canGoForward;
+    const resetHomeHistory = this.#homeResetPanelId === this.#activeId;
+    this.#navBack.hidden = resetHomeHistory || !browser?.canGoBack;
+    this.#navForward.hidden = resetHomeHistory || !browser?.canGoForward;
+    this.#navPin.hidden = !this.#canPinPanelToSplitView();
+  }
+
+  #syncNavigationOrder() {
+    if (!this.#navBar) {
+      return;
+    }
+
+    const buttons = this.#store.navigationOrder === NAVIGATION_ORDER_HOME_FIRST
+      ? [this.#navHome, this.#navReload, this.#navBack, this.#navForward]
+      : [this.#navBack, this.#navForward, this.#navReload, this.#navHome];
+    this.#navBar.append(...buttons, this.#navPin);
+  }
+
+  #activePanelUrl() {
+    const url = this.#activePanelBrowser()?.currentURI?.spec;
+    return normalizeWebPanelUrl(url) ? url : null;
+  }
+
+  #splitViewCapacity(parentTab, splitter) {
+    const maxTabs = Number.isInteger(splitter?.MAX_TABS) ? splitter.MAX_TABS : 4;
+    if (!parentTab?.splitView) {
+      return { currentTabs: [parentTab], maxTabs };
+    }
+
+    const group = splitter?._data?.find(entry => entry?.tabs?.includes(parentTab));
+    return Array.isArray(group?.tabs) ? { currentTabs: group.tabs, maxTabs } : null;
+  }
+
+  #canPinPanelToSplitView() {
+    const parentTab = this.#surfaceState?.parentTab;
+    const splitter = this.window.gZenViewSplitter;
+    if (!parentTab || !this.#activePanelUrl() || typeof splitter?.splitTabs !== "function") {
+      return false;
+    }
+
+    const capacity = this.#splitViewCapacity(parentTab, splitter);
+    return Boolean(capacity && capacity.currentTabs.length < capacity.maxTabs);
+  }
+
+  #removeUnsplitTab(tab) {
+    if (!tab || tab.closing) {
+      return;
+    }
+    try {
+      this.window.gBrowser?.removeTab?.(tab, { skipPermitUnload: true, animate: false });
+    } catch (error) {
+      console.warn("[Web Panels] Could not remove the tab created for a failed split.", error);
+    }
+  }
+
+  #pinPanelToSplitView() {
+    if (!this.#canPinPanelToSplitView()) {
+      return;
+    }
+
+    const parentTab = this.#surfaceState?.parentTab;
+    const url = this.#activePanelUrl();
+    const gBrowser = this.window.gBrowser;
+    const splitter = this.window.gZenViewSplitter;
+    let newTab = null;
+
+    try {
+      newTab = gBrowser?.addTrustedTab?.(url, {
+        inBackground: true,
+        skipBackgroundNotify: true,
+        triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal(),
+      });
+      if (!newTab) {
+        return;
+      }
+
+      // Zen uses the same call for Glance: the original page is left-most and
+      // a fresh page joins on the right. If the parent is already split, its
+      // splitter appends the new tab, preserving the existing order.
+      const split = splitter.splitTabs([parentTab, newTab], "vsep", 1);
+      if (!split) {
+        this.#removeUnsplitTab(newTab);
+        return;
+      }
+
+      this.#closePanel({ animate: false });
+    } catch (error) {
+      console.warn("[Web Panels] Could not open the panel in Split View.", error);
+      this.#removeUnsplitTab(newTab);
+    }
   }
 
   #syncUnreadFromTab(itemId) {
@@ -1237,7 +1395,7 @@ export class SineWebPanels {
 
     const mk = (name, label, handler) => {
       const button = this.#button({
-        className: `sine-web-panels-nav-button sine-web-panels-nav-${name}`,
+        className: `no-squircles sine-web-panels-nav-button sine-web-panels-nav-${name}`,
         title: label,
       });
       button.setAttribute("aria-label", label);
@@ -1253,9 +1411,10 @@ export class SineWebPanels {
     this.#navForward = mk("forward", "Forward", () => this.#navGoForward());
     this.#navReload = mk("reload", "Reload", () => this.#navReloadPage());
     this.#navHome = mk("home", "Home (reset this panel)", () => this.#navGoHome());
+    this.#navPin = mk("pin", "Open in Split View", () => this.#pinPanelToSplitView());
 
-    bar.append(this.#navBack, this.#navForward, this.#navReload, this.#navHome);
     this.#navBar = bar;
+    this.#syncNavigationOrder();
     this.#updateNavState();
     return bar;
   }
@@ -1983,9 +2142,40 @@ export class SineWebPanels {
     }
   };
 
+  #onPageEscape(browser, verdict) {
+    if (this.#escapeTimer === null || browser !== this.#activePanelBrowser()) {
+      return;
+    }
+    this.#cancelPendingEscape();
+    if (!verdict?.consumed) {
+      this.#closePanel();
+    }
+  }
+
+  #ensureEscapeScript(browser) {
+    const loader = browser?.frameLoader;
+    if (!loader || this.#escapeScriptLoaders.has(loader)) {
+      return;
+    }
+    try {
+      browser.messageManager?.loadFrameScript(ESCAPE_FRAME_SCRIPT, false);
+      this.#escapeScriptLoaders.add(loader);
+    } catch (error) {
+      console.warn("[Web Panels] Could not load the Escape frame script.", error);
+    }
+  }
+
+  #cancelPendingEscape() {
+    if (this.#escapeTimer !== null) {
+      this.window.clearTimeout(this.#escapeTimer);
+      this.#escapeTimer = null;
+    }
+  }
+
   #onKeyDown = event => {
-    // Chrome is hidden in fullscreen, so the panel shortcuts stay dormant —
-    // otherwise Ctrl+Alt+1 would open an invisible panel over the video.
+    // Chrome is hidden in content fullscreen, so the panel shortcuts stay
+    // dormant — otherwise Ctrl+Alt+1 would open an invisible panel over the
+    // video.
     if (this.#fullscreen) {
       return;
     }
@@ -1998,6 +2188,16 @@ export class SineWebPanels {
       }
       this.#closeMenu();
       this.#closeEditor();
+      const browser = this.#activePanelBrowser();
+      if (browser && event.target === browser) {
+        // Typed into the panel's page: the page may be closing its own
+        // preview with it. Wait for the escape actor's verdict.
+        this.#escapeTimer ??= this.window.setTimeout(() => {
+          this.#escapeTimer = null;
+          this.#closePanel();
+        }, ESCAPE_REPLY_TIMEOUT);
+        return;
+      }
       this.#closePanel();
       return;
     }
@@ -2026,6 +2226,20 @@ export class SineWebPanels {
     // numbering follows the visible panel order rather than the raw item
     // index. The modifier combination is configurable in the mod's settings.
     if (!shortcutMatches(event, this.#store.shortcutModifier)) {
+      return;
+    }
+
+    // The physical section key reports either § or ± depending on the active
+    // keyboard layout and whether the configured shortcut includes Alt / ⌥.
+    if (event.key === "§" || event.key === "±") {
+      const panels = this.#items.filter(isPanel);
+      const activeIndex = panels.findIndex(panel => panel.id === this.#activeId);
+      const target = panels[(activeIndex + 1 + panels.length) % panels.length];
+      if (target) {
+        event.preventDefault();
+        event.stopPropagation();
+        this.#openPanel(target);
+      }
       return;
     }
 

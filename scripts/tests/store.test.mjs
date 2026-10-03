@@ -8,6 +8,7 @@ const {
   MIN_PANEL_WIDTH,
   normalizeResizerColor,
   normalizeWebPanelUrl,
+  PANEL_CONTROL_LANE,
   PANEL_VIEWPORT_INSET,
   PANEL_VIEWPORT_MAX_WIDTH_RATIO,
   panelMaxWidthFromViewport,
@@ -52,7 +53,10 @@ test("viewport geometry measures the page area, not the whole window", () => {
   const rect = { top: 40, left: 320, width: 1600, height: 1000 };
   const geometry = calculateWebPanelViewportGeometry(rect, WINDOW);
 
-  assert.equal(geometry.maxWidth, Math.floor(1600 * PANEL_VIEWPORT_MAX_WIDTH_RATIO));
+  assert.equal(
+    geometry.maxWidth,
+    Math.floor(1600 * PANEL_VIEWPORT_MAX_WIDTH_RATIO) - PANEL_CONTROL_LANE
+  );
   assert.ok(geometry.maxWidth < WINDOW.width, "must not span the whole window");
   assert.equal(geometry.top, 40 + PANEL_VIEWPORT_INSET);
   assert.equal(geometry.height, 1000 - PANEL_VIEWPORT_INSET * 2);
@@ -63,11 +67,14 @@ test("viewport geometry clips the rect to the window it sits in", () => {
   const rect = { top: 0, left: 1000, width: 4000, height: 1080 };
   const geometry = calculateWebPanelViewportGeometry(rect, WINDOW);
 
-  assert.equal(geometry.maxWidth, Math.floor(920 * PANEL_VIEWPORT_MAX_WIDTH_RATIO));
+  assert.equal(
+    geometry.maxWidth,
+    Math.floor(920 * PANEL_VIEWPORT_MAX_WIDTH_RATIO) - PANEL_CONTROL_LANE
+  );
 });
 
 test("viewport geometry falls back to the window when the rect is unusable", () => {
-  const expected = Math.floor(WINDOW.width * PANEL_VIEWPORT_MAX_WIDTH_RATIO);
+  const expected = Math.floor(WINDOW.width * PANEL_VIEWPORT_MAX_WIDTH_RATIO) - PANEL_CONTROL_LANE;
 
   assert.equal(calculateWebPanelViewportGeometry(null, WINDOW).maxWidth, expected);
   assert.equal(calculateWebPanelViewportGeometry({}, WINDOW).maxWidth, expected);
@@ -85,6 +92,25 @@ test("viewport geometry never returns a negative or zero maximum", () => {
 
   assert.ok(geometry.maxWidth >= 1);
   assert.ok(geometry.height >= 0);
+});
+
+test("viewport geometry reserves the floating navigation lane before clamping the panel", () => {
+  const narrowPage = { top: 0, left: 320, width: 400, height: 900 };
+
+  assert.equal(
+    panelMaxWidthFromViewport(narrowPage, { top: 0, left: 0, width: 720, height: 900 }),
+    Math.floor(400 * PANEL_VIEWPORT_MAX_WIDTH_RATIO) - PANEL_CONTROL_LANE
+  );
+});
+
+test("viewport geometry reserves the full Glance-size control lane", () => {
+  const rect = { top: 40, left: 320, width: 1600, height: 1000 };
+
+  assert.equal(
+    calculateWebPanelViewportGeometry(rect, WINDOW).maxWidth,
+    1474,
+    "a 34px control, 8px resize target, and 4px gap stay clear of Zen's sidebar"
+  );
 });
 
 test("clampWebPanelWidth keeps a width inside the measured maximum", () => {
@@ -149,7 +175,7 @@ test("a good measurement still yields a maximum", () => {
 
   assert.equal(
     panelMaxWidthFromViewport(rect, WINDOW),
-    Math.floor(1600 * PANEL_VIEWPORT_MAX_WIDTH_RATIO)
+    Math.floor(1600 * PANEL_VIEWPORT_MAX_WIDTH_RATIO) - PANEL_CONTROL_LANE
   );
 });
 

@@ -15,6 +15,11 @@ export const DEFAULT_PANEL_WIDTH = 420;
 // the measuring is the caller's job.
 export const PANEL_VIEWPORT_INSET = 8;
 export const PANEL_VIEWPORT_MAX_WIDTH_RATIO = 0.95;
+// The navigation controls sit just outside the panel frame. Reserve their
+// whole footprint while clamping so a narrow panel cannot push them into
+// Zen's sidebar. This stays deliberately in sync with the 34px Glance-size
+// control, 8px resizer target, and 4px gutter in the stylesheet.
+export const PANEL_CONTROL_LANE = 46;
 
 function positiveNumber(value, fallback) {
   return typeof value === "number" && Number.isFinite(value) && value > 0
@@ -49,10 +54,16 @@ export function calculateWebPanelViewportGeometry(rect, fallbackViewport = {}) {
   const visibleHeight = Math.max(0, visibleBottom - visibleTop);
   const visibleWidth = Math.max(0, visibleRight - visibleLeft);
 
+  const unreservedMaxWidth = Math.max(1, Math.floor(visibleWidth * PANEL_VIEWPORT_MAX_WIDTH_RATIO));
+
   return {
     top: visibleTop + PANEL_VIEWPORT_INSET,
     height: Math.max(0, visibleHeight - PANEL_VIEWPORT_INSET * 2),
-    maxWidth: Math.max(1, Math.floor(visibleWidth * PANEL_VIEWPORT_MAX_WIDTH_RATIO)),
+    // The page's visible width bounds the panel itself, but the controls also
+    // occupy a lane on the page side of the frame. Clamping only the panel
+    // here would still let that lane cover Zen's sidebar in a narrow window.
+    maxWidth: Math.max(1, unreservedMaxWidth - PANEL_CONTROL_LANE),
+    unreservedMaxWidth,
   };
 }
 
@@ -68,8 +79,11 @@ export function panelMaxWidthFromViewport(rect, fallbackViewport, minWidth = MIN
     return null;
   }
 
-  const { maxWidth } = calculateWebPanelViewportGeometry(rect, fallbackViewport);
-  return maxWidth >= minWidth ? maxWidth : null;
+  const { maxWidth, unreservedMaxWidth } = calculateWebPanelViewportGeometry(rect, fallbackViewport);
+  // Validate the measurement before accounting for the control lane. A real
+  // 400px page may sensibly leave 340px for the panel, while a 100px rect is
+  // still a bad measurement and must not freeze the resizer.
+  return unreservedMaxWidth >= minWidth ? maxWidth : null;
 }
 
 // The minimum yields to the maximum: on a window too narrow for MIN_PANEL_WIDTH
@@ -90,6 +104,7 @@ const PREFS = Object.freeze({
   width: "sine.web-panels.width",
   items: "sine.web-panels.items",
   shortcutModifier: "sine.web-panels.shortcut-modifier",
+  navigationOrder: "sine.web-panels.navigation-order",
   lastUrls: "sine.web-panels.last-urls",
   lastTitles: "sine.web-panels.last-titles",
   resizerColor: "sine.web-panels.resizer-color",
@@ -142,6 +157,18 @@ export const SHORTCUT_MODIFIERS = Object.freeze([
 ]);
 
 export const DEFAULT_SHORTCUT_MODIFIER = "accel+alt";
+
+export const NAVIGATION_ORDER_HISTORY_FIRST = "history-first";
+export const NAVIGATION_ORDER_HOME_FIRST = "home-first";
+export const NAVIGATION_ORDERS = Object.freeze([
+  NAVIGATION_ORDER_HISTORY_FIRST,
+  NAVIGATION_ORDER_HOME_FIRST,
+]);
+export const DEFAULT_NAVIGATION_ORDER = NAVIGATION_ORDER_HISTORY_FIRST;
+
+export function normalizeNavigationOrder(value) {
+  return NAVIGATION_ORDERS.includes(value) ? value : DEFAULT_NAVIGATION_ORDER;
+}
 
 // Values written before the setting became platform-neutral.
 const LEGACY_SHORTCUT_MODIFIERS = Object.freeze({
@@ -298,6 +325,16 @@ export class WebPanelsStore {
 
   set shortcutModifier(value) {
     setStringPref(PREFS.shortcutModifier, normalizeShortcutModifier(value));
+  }
+
+  get navigationOrder() {
+    return normalizeNavigationOrder(
+      readStringPref(PREFS.navigationOrder, DEFAULT_NAVIGATION_ORDER)
+    );
+  }
+
+  set navigationOrder(value) {
+    setStringPref(PREFS.navigationOrder, normalizeNavigationOrder(value));
   }
 
   // Where each panel actually was, keyed by panel id. Deliberately a separate

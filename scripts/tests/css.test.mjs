@@ -30,11 +30,13 @@ test("the resize handle stays hit-testable", () => {
   assert.match(resizer, /cursor:\s*ew-resize/, "the cursor is half the affordance");
 });
 
-test("the resize indicator spans the panel edge rather than a stub of it", () => {
+test("the resize indicator leaves breathing room at the top and bottom", () => {
   const indicator = rule("#sine-web-panels-resizer::before");
+  const root = rule(":root");
 
-  assert.match(indicator, /inset-block:\s*0/);
-  assert.doesNotMatch(indicator, /height:\s*\d+px/, "no fixed height");
+  assert.match(indicator, /inset-block:\s*var\(--sine-web-panels-resizer-edge-inset\)/);
+  assert.doesNotMatch(indicator, /inset-block:\s*0/);
+  assert.match(root, /--sine-web-panels-resizer-edge-inset:\s*\d+px/);
 });
 
 test("the resize indicator follows a theme colour, not a hard-coded one", () => {
@@ -43,14 +45,25 @@ test("the resize indicator follows a theme colour, not a hard-coded one", () => 
   assert.match(indicator, /background:\s*var\(--sine-web-panels-accent\)/);
 });
 
-// A var() chain that resolves to nothing paints nothing, which is exactly the
-// failure being fixed — so the last link must be a colour that always exists.
-test("the accent chain ends in a colour that cannot fail to resolve", () => {
+// Zen Glance uses the active Zen colour for its controls. The resize cue is
+// part of that same interaction surface, but stays short so it does not turn
+// back into the old full-height stripe.
+test("the default resize cue follows Zen's active colour", () => {
   const root = rule(":root");
 
   assert.match(root, /--sine-web-panels-accent:/);
-  assert.match(root, /--zen-primary-color/, "prefers Zen's own theme colour");
-  assert.match(root, /AccentColor\s*\)/, "falls back to the system accent");
+  assert.match(root, /--zen-primary-color/, "matches Zen Glance's icon colour");
+  assert.match(root, /AccentColor/, "has a resilient fallback");
+});
+
+test("the short resize cue remains visible while its edge is hovered", () => {
+  const root = rule(":root");
+
+  assert.match(root, /--sine-web-panels-resizer-line-active:\s*2px/);
+  assert.match(
+    css,
+    /#sine-web-panels-resizer:hover::before,[\s\S]*?box-shadow:\s*0 0 \d+px/
+  );
 });
 
 // --------------------------------------------------------------------------
@@ -62,18 +75,78 @@ test("the accent chain ends in a colour that cannot fail to resolve", () => {
 
 test("the navigation controls float beside the panel, not over it", () => {
   const nav = rule(".sine-web-panels-nav");
+  const root = rule(":root");
 
   assert.doesNotMatch(nav, /gradient/, "no gradient");
   assert.doesNotMatch(nav, /opacity:\s*0\b/, "not hidden until hovered");
   assert.doesNotMatch(nav, /inset-inline:\s*0/, "does not span the panel's width");
   assert.match(nav, /flex-direction:\s*column/, "a vertical stack");
-  assert.match(nav, /background:\s*var\(--zen-themed-toolbar-bg/, "opaque, themed");
+  assert.match(nav, /background:\s*transparent/, "the buttons, not a pill, own the surface");
+  assert.match(root, /--sine-web-panels-navigation-lane:\s*46px/, "the layout reserves room for the controls");
 
   const right = rule(':root[sine-web-panels-side="right"] .sine-web-panels-nav');
   const left = rule(':root[sine-web-panels-side="left"] .sine-web-panels-nav');
-  assert.match(right, /inset-inline-end:\s*calc\(100%/, "outside the panel's edge on the right");
-  assert.match(left, /inset-inline-start:\s*calc\(100%/, "and on the left");
-  assert.match(right, /--sine-web-panels-resizer-width/, "clear of the resize handle");
+  assert.match(right, /inset-inline-end:\s*calc\(\s*100%/, "outside the panel's edge on the right");
+  assert.match(left, /inset-inline-start:\s*calc\(\s*100%/, "and on the left");
+  assert.match(right, /--sine-web-panels-navigation-lane/, "clear of the resize handle");
+  assert.match(right, /--sine-web-panels-nav-button-size/, "accounts for the button itself");
+});
+
+test("the navigation controls use Zen Glance's circular control treatment", () => {
+  const button = rule(".sine-web-panels-nav-button");
+
+  assert.match(button, /width:\s*var\(--sine-web-panels-nav-button-size\)/);
+  assert.match(button, /height:\s*var\(--sine-web-panels-nav-button-size\)/);
+  assert.match(button, /appearance:\s*none/);
+  assert.match(button, /-moz-appearance:\s*none/);
+  assert.match(button, /border-radius:\s*999px/);
+  assert.match(button, /background:\s*color-mix\(/);
+  assert.match(button, /--zen-primary-color/);
+  assert.match(button, /color:\s*var\(--zen-primary-color\)\s*!important/);
+  assert.match(
+    css,
+    /\.sine-web-panels-nav-button:hover:not\(:disabled\)\s*\{[\s\S]*?scale:\s*1\.02/
+  );
+});
+
+test("only the buttons take the pointer, not the full-height control column", () => {
+  // The column runs the panel's height and sits over the page beside it;
+  // measured in Zen 1.22.3b, an auto column swallowed clicks and wheel there.
+  assert.match(rule(".sine-web-panels-nav"), /pointer-events:\s*none/);
+  assert.match(rule(".sine-web-panels-nav-button"), /pointer-events:\s*auto/);
+});
+
+test("the split action stays at the bottom of the panel and uses Zen's native pin icon", () => {
+  const nav = rule(".sine-web-panels-nav");
+  const pin = rule(".sine-web-panels-nav-pin");
+
+  assert.match(nav, /inset-block-end:\s*15px/, "the control lane spans the panel height");
+  assert.match(pin, /margin-block-start:\s*auto/, "the split action anchors at the bottom");
+  assert.match(
+    css,
+    /\.sine-web-panels-nav-pin::before\s*\{[\s\S]*?zen-icons\/pin\.svg/,
+    "the button uses Zen's native pin symbol"
+  );
+});
+
+test("rail item hover follows Zen's default toolbar button corner radius", () => {
+  assert.match(
+    css,
+    /border-radius:\s*var\(--toolbarbutton-border-radius,\s*var\(--zen-native-inner-radius,\s*8px\)\)/
+  );
+});
+
+test("the page behind an open panel becomes translucent without a black scrim", () => {
+  const viewport = rule(
+    ".browserSidebarContainer.sine-web-panels-parent-background .browserContainer > .browserStack > browser"
+  );
+
+  assert.match(viewport, /opacity:\s*0\.5/);
+  // The panel's own container carries .sine-web-panels-overlay, never the
+  // parent-background hook, so no rule may dim the overlay itself.
+  assert.doesNotMatch(css, /\.sine-web-panels-overlay[^{]*\{[^}]*opacity:\s*0\.\d/);
+  assert.doesNotMatch(css, /#sine-web-panels-backdrop/);
+  assert.doesNotMatch(css, /color-mix\(in srgb, black 50%, transparent\)/);
 });
 
 test("the navigation controls do not come and go with the pointer", () => {

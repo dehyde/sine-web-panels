@@ -7,6 +7,7 @@ const PREFS = {
   collapsed: "sine.web-panels.collapsed",
   width: "sine.web-panels.width",
   items: "sine.web-panels.items",
+  navigationOrder: "sine.web-panels.navigation-order",
 };
 
 // The controller reads globalThis.Services at import time, and createChromeWindow
@@ -61,6 +62,17 @@ test("mounting builds the rail and reserves a strip of window for it", () => {
 
   app.controller.destroy();
   assert.equal(app.root(), null, "and unloading leaves nothing behind");
+});
+
+test("the rail keeps its fixed separator directly after the collapse toggle", () => {
+  const app = mount();
+  const rail = app.el("rail");
+  const separator = app.el("rail-separator");
+
+  assert.equal(rail.children[0], app.el("toggle"), "the collapse control stays first");
+  assert.equal(separator.getAttribute("role"), "separator");
+  assert.equal(rail.children[1], separator, "the separator cannot move into a panel's saved order");
+  assert.equal(separator.dataset.itemId, undefined, "it is not a saved or draggable rail item");
 });
 
 test("a width stored from a wider window is clamped on the way in", () => {
@@ -153,19 +165,31 @@ test("the peek is held open while a menu is up, so the rail cannot slide away", 
 test("fullscreen takes the rail off the screen and gives its strip back", () => {
   const app = mount();
 
-  app.setRootAttribute("inFullscreen", "true");
+  app.setRootAttribute("inDOMFullscreen", "true");
 
   assert.ok(app.root().hasAttribute("fullscreen"));
   assert.equal(app.browser.getAttribute("sine-web-panels-side"), null);
   assert.equal(app.appContent.style.has("margin-inline-end"), false);
 
-  app.setRootAttribute("inFullscreen", null);
+  app.setRootAttribute("inDOMFullscreen", null);
 
   assert.equal(app.root().hasAttribute("fullscreen"), false);
   assert.ok(
     app.browser.style.getPropertyValue("--sine-web-panels-reserved-inline-size"),
     "and puts it back afterwards"
   );
+});
+
+test("native window fullscreen keeps the rail and its reserved strip", () => {
+  const app = mount();
+
+  // Zen sets inFullscreen for native macOS/F11 fullscreen too. The rail is
+  // still browser chrome there, so it must remain available.
+  app.setRootAttribute("inFullscreen", "true");
+
+  assert.equal(app.root().hasAttribute("fullscreen"), false, "the rail stays rendered");
+  assert.equal(app.browser.getAttribute("sine-web-panels-side"), "right");
+  assert.ok(app.appContent.style.has("margin-inline-end"), "its strip stays reserved");
 });
 
 test("the rail moves when Zen's sidebar changes side", () => {
@@ -193,7 +217,7 @@ test("the configured shortcut toggles the rail", () => {
 
 test("the shortcut is dormant in fullscreen", () => {
   const app = mount();
-  app.setRootAttribute("inFullscreen", "true");
+  app.setRootAttribute("inDOMFullscreen", "true");
 
   app.document.dispatch("keydown", keydown("KeyB", { ctrlKey: true, altKey: true }));
 
@@ -345,6 +369,47 @@ test("opening a panel from the rail leaves it open, on its own tab", () => {
   );
 });
 
+test("the underlying tab is marked for viewport transparency without adding a scrim", () => {
+  const { app, ordinary } = mountWithPanels(["https://mail.example/"]);
+
+  railButton(app, "panel-1").dispatch("click");
+
+  assert.ok(
+    ordinary.linkedPanel.classList.contains("sine-web-panels-parent-background"),
+    "the background tab receives the transparency hook"
+  );
+  assert.equal(Boolean(app.el("backdrop")), false, "no black overlay is mounted in Zen chrome or the page frame");
+
+  railButton(app, "panel-1").dispatch("click");
+  app.advance(100);
+
+  assert.equal(ordinary.linkedPanel.classList.contains("sine-web-panels-parent-background"), false);
+});
+
+test("only the page behind is dimmed — never the panel, not even after switching panels", () => {
+  const { app, ordinary } = mountWithPanels(["https://mail.example/", "https://plane.example/app"]);
+  // Compare labels, never the tab objects: a failing deepEqual on fake tabs
+  // serialises the whole circular fake DOM and ran WSL out of memory
+  // (2026-10-02).
+  const label = tab => tab.getAttribute("sine-web-panel-id") ?? "ordinary";
+  const dimmed = () =>
+    [...app.window.gBrowser.tabs]
+      .filter(tab => tab.linkedPanel.classList.contains("sine-web-panels-parent-background"))
+      .map(label);
+
+  railButton(app, "panel-1").dispatch("click");
+  assert.deepEqual(dimmed(), [label(ordinary)], "exactly one dimmed container: the parent tab's");
+
+  railButton(app, "panel-2").dispatch("click");
+  app.advance(100);
+  assert.deepEqual(dimmed(), [label(ordinary)], "the switch neither dims a panel nor drops the parent's dimming");
+  assert.equal(
+    app.window.gBrowser.selectedTab.linkedPanel.classList.contains("sine-web-panels-parent-background"),
+    false,
+    "the visible panel is drawn at full opacity"
+  );
+});
+
 test("switching panels moves the selection to the new panel's tab", () => {
   const { app, ordinary } = mountWithPanels(["https://mail.example/", "https://plane.example/app"]);
 
@@ -396,10 +461,146 @@ test("opening a panel mounts back, forward, reload and home beside it", () => {
   assert.equal(nav.getAttribute("aria-orientation"), "vertical");
   assert.deepEqual(
     [...nav.querySelectorAll(".sine-web-panels-nav-button")].map(button => button.getAttribute("aria-label")),
-    ["Back", "Forward", "Reload", "Home (reset this panel)"]
+    ["Back", "Forward", "Reload", "Home (reset this panel)", "Open in Split View"]
   );
-  assert.equal(nav.querySelector(".sine-web-panels-nav-back").disabled, true, "no history yet");
-  assert.equal(nav.querySelector(".sine-web-panels-nav-forward").disabled, true);
+  assert.equal(nav.querySelector(".sine-web-panels-nav-back").hidden, true, "no history yet");
+  assert.equal(nav.querySelector(".sine-web-panels-nav-forward").hidden, true);
+});
+
+test("pin becomes available after an eligible panel surface opens", () => {
+  const { app } = mountWithPanels(["https://mail.example/"]);
+  installSplitView(app);
+
+  railButton(app, "panel-1").dispatch("click");
+
+  assert.equal(
+    navOf(app).querySelector(".sine-web-panels-nav-pin").hidden,
+    false,
+    "the native split action appears once the panel knows its parent tab"
+  );
+});
+
+test("navigation order defaults to history first and updates from its setting", () => {
+  const { app } = mountWithPanels(["https://mail.example/"]);
+  railButton(app, "panel-1").dispatch("click");
+
+  const nav = navOf(app);
+  assert.deepEqual(
+    [...nav.querySelectorAll(".sine-web-panels-nav-button")].map(button => button.getAttribute("aria-label")),
+    ["Back", "Forward", "Reload", "Home (reset this panel)", "Open in Split View"],
+    "the existing order remains the default"
+  );
+
+  app.prefs.setStringPref(PREFS.navigationOrder, "home-first");
+
+  assert.deepEqual(
+    [...nav.querySelectorAll(".sine-web-panels-nav-button")].map(button => button.getAttribute("aria-label")),
+    ["Home (reset this panel)", "Reload", "Back", "Forward", "Open in Split View"],
+    "the alternative puts reset and refresh before history"
+  );
+});
+
+test("panel navigation buttons opt out of Zen's global squircle shape", () => {
+  const { app } = mountWithPanels(["https://mail.example/"]);
+
+  railButton(app, "panel-1").dispatch("click");
+
+  for (const button of navOf(app).querySelectorAll(".sine-web-panels-nav-button")) {
+    assert.ok(
+      button.classList.contains("no-squircles"),
+      "Zen's Glance controls stay circular even when the global squircle preference is on"
+    );
+  }
+});
+
+function installSplitView(app, { maxTabs = 4, groupTabs = [], splitResult = "success" } = {}) {
+  const calls = [];
+  const group = { tabs: [...groupTabs] };
+  app.window.gZenViewSplitter = {
+    MAX_TABS: maxTabs,
+    _data: groupTabs.length ? [group] : [],
+    splitTabs(tabs, layout, initialIndex) {
+      calls.push({ tabs, layout, initialIndex });
+      if (splitResult === "failure") {
+        return undefined;
+      }
+      for (const tab of tabs) {
+        if (!group.tabs.includes(tab)) {
+          group.tabs.push(tab);
+          tab.splitView = true;
+        }
+      }
+      if (!this._data.length) {
+        this._data.push(group);
+      }
+      app.window.gBrowser.selectedTab = tabs[initialIndex];
+      return group;
+    },
+  };
+  return { calls, group };
+}
+
+test("pin opens the panel's current location in a native split view, then closes the panel", () => {
+  const { app, ordinary } = mountWithPanels(["https://mail.example/"]);
+  const split = installSplitView(app);
+
+  railButton(app, "panel-1").dispatch("click");
+  app.window.gBrowser.selectedTab.linkedBrowser.currentURI.spec = "https://mail.example/inbox/42";
+  navOf(app).querySelector(".sine-web-panels-nav-pin").dispatch("click");
+
+  assert.equal(split.calls.length, 1, "Zen receives one split request");
+  assert.equal(split.calls[0].layout, "vsep", "the split opens left-to-right");
+  assert.equal(split.calls[0].initialIndex, 1, "the new right-hand tab is selected");
+  assert.equal(split.calls[0].tabs[0], ordinary, "the existing page stays on the left");
+  assert.equal(split.calls[0].tabs[1].linkedBrowser.currentURI.spec, "https://mail.example/inbox/42");
+  assert.equal(app.root().hasAttribute("open"), false, "the Web Panel closes after the native split succeeds");
+});
+
+test("pin appends to the right of an existing split group until its fourth pane", () => {
+  const { app, ordinary } = mountWithPanels(["https://mail.example/"]);
+  const second = app.addTab({ url: "https://second.example/" });
+  const third = app.addTab({ url: "https://third.example/" });
+  ordinary.splitView = true;
+  second.splitView = true;
+  third.splitView = true;
+  const split = installSplitView(app, { groupTabs: [ordinary, second, third] });
+
+  railButton(app, "panel-1").dispatch("click");
+  navOf(app).querySelector(".sine-web-panels-nav-pin").dispatch("click");
+
+  assert.equal(split.calls.length, 1);
+  assert.deepEqual(split.group.tabs.slice(0, 3), [ordinary, second, third]);
+  assert.equal(split.group.tabs.length, 4, "the new page is appended as the fourth pane");
+});
+
+test("pin is unavailable when the parent tab already has four split panes", () => {
+  const { app, ordinary } = mountWithPanels(["https://mail.example/"]);
+  const second = app.addTab({ url: "https://second.example/" });
+  const third = app.addTab({ url: "https://third.example/" });
+  const fourth = app.addTab({ url: "https://fourth.example/" });
+  for (const tab of [ordinary, second, third, fourth]) {
+    tab.splitView = true;
+  }
+  const split = installSplitView(app, { groupTabs: [ordinary, second, third, fourth] });
+
+  railButton(app, "panel-1").dispatch("click");
+  const pin = navOf(app).querySelector(".sine-web-panels-nav-pin");
+  assert.equal(pin.hidden, true, "the button is hidden rather than replacing an existing pane");
+  pin.dispatch("click");
+  assert.equal(split.calls.length, 0, "a stale click cannot create a fifth pane");
+});
+
+test("pin leaves the panel open and removes the temporary tab when Zen declines the split", () => {
+  const { app } = mountWithPanels(["https://mail.example/"]);
+  const split = installSplitView(app, { splitResult: "failure" });
+
+  railButton(app, "panel-1").dispatch("click");
+  const tabCountBeforePin = app.window.gBrowser.tabs.length;
+  navOf(app).querySelector(".sine-web-panels-nav-pin").dispatch("click");
+
+  assert.equal(split.calls.length, 1);
+  assert.equal(app.root().getAttribute("open"), "true", "the panel stays available after a failed native action");
+  assert.equal(app.window.gBrowser.tabs.length, tabCountBeforePin, "the unused ordinary tab is rolled back");
 });
 
 test("back and forward follow the panel browser's history", () => {
@@ -420,7 +621,41 @@ test("back and forward follow the panel browser's history", () => {
   // catches up with the browser's without a separate event.
   nav.querySelector(".sine-web-panels-nav-back").dispatch("click");
   assert.deepEqual(calls, ["back"]);
-  assert.equal(nav.querySelector(".sine-web-panels-nav-back").disabled, false);
+  assert.equal(nav.querySelector(".sine-web-panels-nav-back").hidden, false);
+});
+
+test("the section-key shortcut advances panels, skips separators, and wraps", () => {
+  const app = mount({
+    prefs: {
+      [PREFS.items]: JSON.stringify([
+        { type: "panel", id: "panel-1", url: "https://mail.example/" },
+        { type: "separator", id: "separator-1" },
+        { type: "panel", id: "panel-2", url: "https://chat.example/" },
+      ]),
+    },
+  });
+  app.addTab({ url: "https://plane.example/", select: true });
+
+  app.document.dispatch("keydown", keydown("IntlBackslash", {
+    ctrlKey: true,
+    altKey: true,
+    key: "§",
+  }));
+  assert.equal(app.root().getAttribute("active"), "panel-1", "none open starts at the first panel");
+
+  app.document.dispatch("keydown", keydown("IntlBackslash", {
+    ctrlKey: true,
+    altKey: true,
+    key: "±",
+  }));
+  assert.equal(app.root().getAttribute("active"), "panel-2", "the alternate section glyph advances too");
+
+  app.document.dispatch("keydown", keydown("IntlBackslash", {
+    ctrlKey: true,
+    altKey: true,
+    key: "§",
+  }));
+  assert.equal(app.root().getAttribute("active"), "panel-1", "the last panel wraps to the first");
 });
 
 test("home reloads the panel's configured URL and forgets where it drifted to", () => {
@@ -436,6 +671,76 @@ test("home reloads the panel's configured URL and forgets where it drifted to", 
 
   assert.deepEqual(loads, ["https://mail.example/"]);
   assert.equal(JSON.parse(app.prefs.getStringPref("sine.web-panels.last-urls"))["panel-1"], undefined);
+});
+
+test("home hides history controls while it resets the panel", () => {
+  const { app } = mountWithPanels(["https://mail.example/"]);
+  railButton(app, "panel-1").dispatch("click");
+
+  const browser = app.window.gBrowser.selectedTab.linkedBrowser;
+  browser.canGoBack = true;
+  browser.canGoForward = true;
+  browser.loadURI = () => {};
+
+  navOf(app).querySelector(".sine-web-panels-nav-home").dispatch("click");
+
+  assert.equal(navOf(app).querySelector(".sine-web-panels-nav-back").hidden, true);
+  assert.equal(navOf(app).querySelector(".sine-web-panels-nav-forward").hidden, true);
+});
+
+// A remote <browser> never fires `load` in the parent, so the reset has to
+// be driven by the tabs progress listener, the way Zen delivers it.
+const STATE_STOP_WINDOW = 0x10 | 0x80000;
+
+function progress(app, browser) {
+  const listeners = app.window.gBrowser.progressListeners;
+  return {
+    commit({ isTopLevel = true } = {}) {
+      listeners.forEach(l => l.onLocationChange?.(browser, { isTopLevel }, null, browser.currentURI, 0));
+    },
+    stop() {
+      listeners.forEach(l => l.onStateChange?.(browser, { isTopLevel: true }, null, STATE_STOP_WINDOW, 0));
+    },
+  };
+}
+
+test("history controls come back once the user navigates away from the reset page", () => {
+  const { app } = mountWithPanels(["https://mail.example/"]);
+  railButton(app, "panel-1").dispatch("click");
+
+  const browser = app.window.gBrowser.selectedTab.linkedBrowser;
+  browser.canGoBack = true;
+  browser.canGoForward = false;
+  browser.loadURI = () => {};
+  const back = () => navOf(app).querySelector(".sine-web-panels-nav-back");
+  const wire = progress(app, browser);
+
+  navOf(app).querySelector(".sine-web-panels-nav-home").dispatch("click");
+  wire.commit();
+  wire.stop();
+  assert.equal(back().hidden, true, "still hidden on the freshly reset page");
+
+  wire.commit({ isTopLevel: false });
+  assert.equal(back().hidden, true, "an iframe loading inside the reset page is not the user navigating");
+
+  wire.commit();
+  assert.equal(back().hidden, false, "the next navigation brings Back back");
+});
+
+test("a stop from the request Home aborted does not end the reset early", () => {
+  const { app } = mountWithPanels(["https://mail.example/"]);
+  railButton(app, "panel-1").dispatch("click");
+
+  const browser = app.window.gBrowser.selectedTab.linkedBrowser;
+  browser.canGoBack = true;
+  browser.loadURI = () => {};
+  const back = () => navOf(app).querySelector(".sine-web-panels-nav-back");
+  const wire = progress(app, browser);
+
+  navOf(app).querySelector(".sine-web-panels-nav-home").dispatch("click");
+  wire.stop();
+  wire.commit();
+  assert.equal(back().hidden, true, "the reset page itself committing must not reveal Back");
 });
 
 test("reload refreshes the page the panel is on, without resetting it", () => {
@@ -456,6 +761,107 @@ test("reload refreshes the page the panel is on, without resetting it", () => {
     "https://mail.example/thread/7",
     "where the panel was is kept"
   );
+});
+
+// --------------------------------------------------------------------------
+// Escape typed into a panel's page belongs to the page first: Gmail's
+// attachment preview closes on it. Chrome sees the key before the page does,
+// so the panel waits for the escape frame script's verdict.
+// --------------------------------------------------------------------------
+
+const ESCAPE_MESSAGE = "SineWebPanels:Escape";
+
+function openPanelWithPage(urls = ["https://mail.example/"]) {
+  const { app } = mountWithPanels(urls);
+  railButton(app, "panel-1").dispatch("click");
+  const browser = app.window.gBrowser.selectedTab.linkedBrowser;
+  const isOpen = () => app.root().getAttribute("open") === "true";
+  const escapeInPage = () => app.document.dispatch("keydown", { key: "Escape", target: browser });
+  const verdict = consumed =>
+    app.window.messageManager.deliver(ESCAPE_MESSAGE, browser, { consumed });
+  return { app, browser, isOpen, escapeInPage, verdict };
+}
+
+test("Escape that closes the page's own preview leaves the panel open; the next one closes it", () => {
+  const { isOpen, escapeInPage, verdict } = openPanelWithPage();
+
+  escapeInPage();
+  assert.equal(isOpen(), true, "chrome must not act before the page has answered");
+  verdict(true);
+  assert.equal(isOpen(), true, "the page used Escape to close its preview");
+
+  escapeInPage();
+  verdict(false);
+  assert.equal(isOpen(), false, "nothing left in the page to close: the panel goes");
+});
+
+test("with no answer from the page the panel still closes, after the bounded wait", () => {
+  const { app, isOpen, escapeInPage } = openPanelWithPage();
+
+  escapeInPage();
+  app.advance(399);
+  assert.equal(isOpen(), true, "still waiting for the page");
+  app.advance(1);
+  assert.equal(isOpen(), false, "a page without the frame script behaves as before");
+});
+
+test("a late verdict after the timeout changes nothing", () => {
+  const { app, isOpen, escapeInPage, verdict } = openPanelWithPage();
+
+  escapeInPage();
+  app.advance(400);
+  assert.equal(isOpen(), false);
+  app.advance(100);
+  // Reopening must not be closed by the stale answer to the old key.
+  railButton(app, "panel-1").dispatch("click");
+  assert.equal(isOpen(), true);
+  verdict(false);
+  assert.equal(isOpen(), true);
+});
+
+test("Escape with focus in chrome closes the panel at once, without waiting", () => {
+  const { app, isOpen } = openPanelWithPage();
+
+  app.document.dispatch("keydown", { key: "Escape", target: app.root() });
+  assert.equal(isOpen(), false);
+});
+
+test("a verdict from another browser is ignored", () => {
+  const { app, isOpen, escapeInPage } = openPanelWithPage();
+  const other = app.addTab({ url: "https://other.example/" }).linkedBrowser;
+
+  escapeInPage();
+  app.window.messageManager.deliver(ESCAPE_MESSAGE, other, { consumed: false });
+  assert.equal(isOpen(), true, "only the open panel's page decides");
+});
+
+test("switching panels drops a pending Escape", () => {
+  const { app, isOpen, escapeInPage } = openPanelWithPage(["https://mail.example/", "https://plane.example/"]);
+
+  escapeInPage();
+  railButton(app, "panel-2").dispatch("click");
+  app.advance(400);
+  assert.equal(isOpen(), true, "the timer of the old panel's Escape must not close the new one");
+});
+
+test("the escape frame script goes into panel browsers only, once per frame loader", () => {
+  const { app, browser, escapeInPage } = openPanelWithPage();
+  const scripts = () => browser.messageManager.frameScripts.filter(url => url.endsWith("web-panels-escape-frame.js")).length;
+
+  assert.equal(scripts(), 1, "loaded when the panel opens");
+  railButton(app, "panel-1").dispatch("click");
+  app.advance(100);
+  railButton(app, "panel-1").dispatch("click");
+  assert.equal(scripts(), 1, "reopening on the same frame loader does not load it twice");
+
+  // A cross-process navigation gives the browser a new frame loader.
+  browser.frameLoader = {};
+  progress(app, browser).commit();
+  assert.equal(scripts(), 2, "the new process gets the script on its first commit");
+
+  const ordinary = app.window.gBrowser.tabs.find(tab => !tab.getAttribute("sine-web-panel-id"));
+  assert.equal(ordinary.linkedBrowser.messageManager.frameScripts.length, 0, "ordinary tabs never get it");
+  escapeInPage();
 });
 
 // --------------------------------------------------------------------------
