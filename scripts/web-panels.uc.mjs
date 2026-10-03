@@ -2229,9 +2229,9 @@ export class SineWebPanels {
       return;
     }
 
-    // The physical section key reports either § or ± depending on the active
-    // keyboard layout and whether the configured shortcut includes Alt / ⌥.
-    if (event.key === "§" || event.key === "±") {
+    // Backquote is the physical key immediately left of 1. Unlike event.key,
+    // event.code stays stable when the active keyboard layout changes.
+    if (event.code === "Backquote") {
       const panels = this.#items.filter(isPanel);
       const activeIndex = panels.findIndex(panel => panel.id === this.#activeId);
       const target = panels[(activeIndex + 1 + panels.length) % panels.length];

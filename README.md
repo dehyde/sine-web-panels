@@ -2,7 +2,7 @@
 
 Web Panels is a Sine mod that adds a temporary web-app panel rail to Zen Browser.
 
-The saved Zen Browser implementation is only a reference. This repository is a standalone Sine mod using `theme.json`, `userChrome.css`, and userChromeJS modules.
+The saved Zen Browser implementation is only a reference. This repository is a standalone Sine mod using `theme.json`, a direct chrome stylesheet, and userChromeJS modules.
 
 Version `0.4.0` is Zen-only. It uses Zen-managed hidden tabs and Zen browser container overlay behavior so panel pages run through normal `gBrowser`/`linkedBrowser` plumbing. That is intentional: it should let browser extensions interact with panel pages the same way they interact with normal tabs.
 
@@ -31,6 +31,15 @@ Version `0.4.0` is Zen-only. It uses Zen-managed hidden tabs and Zen browser con
   ordinary tabs, using a session-store marker that survives one.
 - Clean Sine unload handling for DOM, listeners, and live managed panel tabs.
 
+## Keyboard shortcuts
+
+Shortcuts use the configurable **Panel shortcut** modifier (default: `Ctrl` / `⌘` + `Alt` / `⌥`).
+
+- Modifier + `1` … `0`: toggle the first … tenth panel; separators are ignored.
+- Modifier + `B`: hide or show the rail.
+- Modifier + `P` or `D`: open the panel and tab finder.
+- Modifier + the physical key immediately left of `1` (often `` ` ``, `§`, or `±`): cycle forward through panels.
+
 ## Install
 
 1. Install Sine for your browser.
@@ -44,6 +53,8 @@ The mod is currently Zen-only. Other Firefox-family browsers would need a separa
 ## Preferences
 
 - `sine.web-panels.enabled`: enables or disables the rail.
+- `sine.web-panels.shortcut-modifier`: modifier shared by the panel shortcuts;
+  choose from the listed combinations, or disable them.
 - `sine.web-panels.resizer-color`: colour of the resize handle, as any CSS
   colour. Empty follows the browser theme, which is both the default and the
   way back — clearing the field restores it.
