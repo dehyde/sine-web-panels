@@ -386,6 +386,30 @@ test("the underlying tab is marked for viewport transparency without adding a sc
   assert.equal(ordinary.linkedPanel.classList.contains("sine-web-panels-parent-background"), false);
 });
 
+test("only the page behind is dimmed — never the panel, not even after switching panels", () => {
+  const { app, ordinary } = mountWithPanels(["https://mail.example/", "https://plane.example/app"]);
+  // Compare labels, never the tab objects: a failing deepEqual on fake tabs
+  // serialises the whole circular fake DOM and ran WSL out of memory
+  // (2026-10-02).
+  const label = tab => tab.getAttribute("sine-web-panel-id") ?? "ordinary";
+  const dimmed = () =>
+    [...app.window.gBrowser.tabs]
+      .filter(tab => tab.linkedPanel.classList.contains("sine-web-panels-parent-background"))
+      .map(label);
+
+  railButton(app, "panel-1").dispatch("click");
+  assert.deepEqual(dimmed(), [label(ordinary)], "exactly one dimmed container: the parent tab's");
+
+  railButton(app, "panel-2").dispatch("click");
+  app.advance(100);
+  assert.deepEqual(dimmed(), [label(ordinary)], "the switch neither dims a panel nor drops the parent's dimming");
+  assert.equal(
+    app.window.gBrowser.selectedTab.linkedPanel.classList.contains("sine-web-panels-parent-background"),
+    false,
+    "the visible panel is drawn at full opacity"
+  );
+});
+
 test("switching panels moves the selection to the new panel's tab", () => {
   const { app, ordinary } = mountWithPanels(["https://mail.example/", "https://plane.example/app"]);
 
@@ -664,6 +688,61 @@ test("home hides history controls while it resets the panel", () => {
   assert.equal(navOf(app).querySelector(".sine-web-panels-nav-forward").hidden, true);
 });
 
+// A remote <browser> never fires `load` in the parent, so the reset has to
+// be driven by the tabs progress listener, the way Zen delivers it.
+const STATE_STOP_WINDOW = 0x10 | 0x80000;
+
+function progress(app, browser) {
+  const listeners = app.window.gBrowser.progressListeners;
+  return {
+    commit({ isTopLevel = true } = {}) {
+      listeners.forEach(l => l.onLocationChange?.(browser, { isTopLevel }, null, browser.currentURI, 0));
+    },
+    stop() {
+      listeners.forEach(l => l.onStateChange?.(browser, { isTopLevel: true }, null, STATE_STOP_WINDOW, 0));
+    },
+  };
+}
+
+test("history controls come back once the user navigates away from the reset page", () => {
+  const { app } = mountWithPanels(["https://mail.example/"]);
+  railButton(app, "panel-1").dispatch("click");
+
+  const browser = app.window.gBrowser.selectedTab.linkedBrowser;
+  browser.canGoBack = true;
+  browser.canGoForward = false;
+  browser.loadURI = () => {};
+  const back = () => navOf(app).querySelector(".sine-web-panels-nav-back");
+  const wire = progress(app, browser);
+
+  navOf(app).querySelector(".sine-web-panels-nav-home").dispatch("click");
+  wire.commit();
+  wire.stop();
+  assert.equal(back().hidden, true, "still hidden on the freshly reset page");
+
+  wire.commit({ isTopLevel: false });
+  assert.equal(back().hidden, true, "an iframe loading inside the reset page is not the user navigating");
+
+  wire.commit();
+  assert.equal(back().hidden, false, "the next navigation brings Back back");
+});
+
+test("a stop from the request Home aborted does not end the reset early", () => {
+  const { app } = mountWithPanels(["https://mail.example/"]);
+  railButton(app, "panel-1").dispatch("click");
+
+  const browser = app.window.gBrowser.selectedTab.linkedBrowser;
+  browser.canGoBack = true;
+  browser.loadURI = () => {};
+  const back = () => navOf(app).querySelector(".sine-web-panels-nav-back");
+  const wire = progress(app, browser);
+
+  navOf(app).querySelector(".sine-web-panels-nav-home").dispatch("click");
+  wire.stop();
+  wire.commit();
+  assert.equal(back().hidden, true, "the reset page itself committing must not reveal Back");
+});
+
 test("reload refreshes the page the panel is on, without resetting it", () => {
   const { app } = mountWithPanels(["https://mail.example/"]);
   app.prefs.setStringPref("sine.web-panels.last-urls", JSON.stringify({ "panel-1": "https://mail.example/thread/7" }));
@@ -682,6 +761,107 @@ test("reload refreshes the page the panel is on, without resetting it", () => {
     "https://mail.example/thread/7",
     "where the panel was is kept"
   );
+});
+
+// --------------------------------------------------------------------------
+// Escape typed into a panel's page belongs to the page first: Gmail's
+// attachment preview closes on it. Chrome sees the key before the page does,
+// so the panel waits for the escape frame script's verdict.
+// --------------------------------------------------------------------------
+
+const ESCAPE_MESSAGE = "SineWebPanels:Escape";
+
+function openPanelWithPage(urls = ["https://mail.example/"]) {
+  const { app } = mountWithPanels(urls);
+  railButton(app, "panel-1").dispatch("click");
+  const browser = app.window.gBrowser.selectedTab.linkedBrowser;
+  const isOpen = () => app.root().getAttribute("open") === "true";
+  const escapeInPage = () => app.document.dispatch("keydown", { key: "Escape", target: browser });
+  const verdict = consumed =>
+    app.window.messageManager.deliver(ESCAPE_MESSAGE, browser, { consumed });
+  return { app, browser, isOpen, escapeInPage, verdict };
+}
+
+test("Escape that closes the page's own preview leaves the panel open; the next one closes it", () => {
+  const { isOpen, escapeInPage, verdict } = openPanelWithPage();
+
+  escapeInPage();
+  assert.equal(isOpen(), true, "chrome must not act before the page has answered");
+  verdict(true);
+  assert.equal(isOpen(), true, "the page used Escape to close its preview");
+
+  escapeInPage();
+  verdict(false);
+  assert.equal(isOpen(), false, "nothing left in the page to close: the panel goes");
+});
+
+test("with no answer from the page the panel still closes, after the bounded wait", () => {
+  const { app, isOpen, escapeInPage } = openPanelWithPage();
+
+  escapeInPage();
+  app.advance(399);
+  assert.equal(isOpen(), true, "still waiting for the page");
+  app.advance(1);
+  assert.equal(isOpen(), false, "a page without the frame script behaves as before");
+});
+
+test("a late verdict after the timeout changes nothing", () => {
+  const { app, isOpen, escapeInPage, verdict } = openPanelWithPage();
+
+  escapeInPage();
+  app.advance(400);
+  assert.equal(isOpen(), false);
+  app.advance(100);
+  // Reopening must not be closed by the stale answer to the old key.
+  railButton(app, "panel-1").dispatch("click");
+  assert.equal(isOpen(), true);
+  verdict(false);
+  assert.equal(isOpen(), true);
+});
+
+test("Escape with focus in chrome closes the panel at once, without waiting", () => {
+  const { app, isOpen } = openPanelWithPage();
+
+  app.document.dispatch("keydown", { key: "Escape", target: app.root() });
+  assert.equal(isOpen(), false);
+});
+
+test("a verdict from another browser is ignored", () => {
+  const { app, isOpen, escapeInPage } = openPanelWithPage();
+  const other = app.addTab({ url: "https://other.example/" }).linkedBrowser;
+
+  escapeInPage();
+  app.window.messageManager.deliver(ESCAPE_MESSAGE, other, { consumed: false });
+  assert.equal(isOpen(), true, "only the open panel's page decides");
+});
+
+test("switching panels drops a pending Escape", () => {
+  const { app, isOpen, escapeInPage } = openPanelWithPage(["https://mail.example/", "https://plane.example/"]);
+
+  escapeInPage();
+  railButton(app, "panel-2").dispatch("click");
+  app.advance(400);
+  assert.equal(isOpen(), true, "the timer of the old panel's Escape must not close the new one");
+});
+
+test("the escape frame script goes into panel browsers only, once per frame loader", () => {
+  const { app, browser, escapeInPage } = openPanelWithPage();
+  const scripts = () => browser.messageManager.frameScripts.filter(url => url.endsWith("web-panels-escape-frame.js")).length;
+
+  assert.equal(scripts(), 1, "loaded when the panel opens");
+  railButton(app, "panel-1").dispatch("click");
+  app.advance(100);
+  railButton(app, "panel-1").dispatch("click");
+  assert.equal(scripts(), 1, "reopening on the same frame loader does not load it twice");
+
+  // A cross-process navigation gives the browser a new frame loader.
+  browser.frameLoader = {};
+  progress(app, browser).commit();
+  assert.equal(scripts(), 2, "the new process gets the script on its first commit");
+
+  const ordinary = app.window.gBrowser.tabs.find(tab => !tab.getAttribute("sine-web-panel-id"));
+  assert.equal(ordinary.linkedBrowser.messageManager.frameScripts.length, 0, "ordinary tabs never get it");
+  escapeInPage();
 });
 
 // --------------------------------------------------------------------------

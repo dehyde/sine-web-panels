@@ -85,6 +85,13 @@ const TOGGLE_ID = "sine-web-panels-toggle";
 const RAIL_SEPARATOR_ID = "sine-web-panels-rail-separator";
 const EDGE_ID = "sine-web-panels-edge";
 
+// nsIWebProgressListener flags. A top-level document finishing its load is
+// STATE_STOP | STATE_IS_WINDOW. Measured on Zen 1.22.3b (2026-10-02): a
+// remote <browser> never receives a `load` event in the parent process — zero
+// across a full reload — so the progress listener is the only signal.
+const STATE_STOP = 0x10;
+const STATE_IS_WINDOW = 0x80000;
+
 // How long the peeked rail waits after the pointer leaves before sliding back
 // out. Long enough to cross the gap to a panel button without chasing it.
 const PEEK_OUT_DELAY = 320;
@@ -93,6 +100,17 @@ const PEEK_OUT_DELAY = 320;
 // remains available there. `inDOMFullscreen` is reserved for a page or video
 // taking over the window, when the rail must get out of the way.
 const FULLSCREEN_ATTRIBUTES = ["inDOMFullscreen"];
+
+// An Escape typed into a panel's page reaches chrome before the page sees it,
+// so whether the page used it (to close its own preview or dialog) is only
+// known in the content process. The escape frame script, loaded into panel
+// browsers only, reports that back; until it does, closing the panel waits.
+const ESCAPE_FRAME_SCRIPT = new URL("./web-panels-escape-frame.js", import.meta.url).href;
+const ESCAPE_MESSAGE = "SineWebPanels:Escape";
+// The frame script settles for 150 ms before answering. Bounds the wait when no
+// verdict comes back (a page loaded into a new process
+// since the script went in, a crashed tab); the panel then closes as before.
+const ESCAPE_REPLY_TIMEOUT = 400;
 
 // Fired once the session's windows and their tabs are back.
 const SESSION_RESTORED_TOPIC = "sessionstore-windows-restored";
@@ -171,7 +189,19 @@ export class SineWebPanels {
   #navHome;
   #navPin;
   #homeResetPanelId = null;
-  #homeResetPageLoaded = false;
+  // After Home the history buttons stay hidden until the user navigates
+  // away from the reset page: "navigating" until its location commits,
+  // "arrived" until it finishes loading, "loaded" until the next location.
+  // Phases, not a flag, because a STATE_STOP from the request Home aborted
+  // can arrive before the reset page commits.
+  #homeResetPhase = null;
+  #escapeTimer = null;
+  // Frame scripts live per frame loader; a cross-process navigation brings a
+  // new one, which needs the script again.
+  #escapeScriptLoaders = new WeakSet();
+  #escapeListener = {
+    receiveMessage: message => this.#onPageEscape(message.target, message.data),
+  };
 
   constructor(windowRef) {
     this.window = windowRef;
@@ -199,6 +229,8 @@ export class SineWebPanels {
 
   destroy() {
     this.#abortController.abort();
+    this.#cancelPendingEscape();
+    this.window.messageManager?.removeMessageListener(ESCAPE_MESSAGE, this.#escapeListener);
     this.#fullscreenObserver?.disconnect();
     this.#fullscreenObserver = null;
     this.#sidebarSideObserver?.disconnect();
@@ -328,24 +360,47 @@ export class SineWebPanels {
     this.window.addEventListener("resize", this.#onWindowResize, { signal });
     this.document.addEventListener("click", this.#onDocumentClick, { signal });
     this.document.addEventListener("keydown", this.#onKeyDown, { signal });
+    this.window.messageManager?.addMessageListener(ESCAPE_MESSAGE, this.#escapeListener);
     this.#tabsProgressListener = {
-      onLocationChange: (browser, _webProgress, _request, _location, _flags) => {
+      onLocationChange: (browser, webProgress, _request, _location, _flags) => {
         const tab = this.window.gBrowser?.getTabForBrowser?.(browser);
         const panelId = tab?.getAttribute?.("sine-web-panel-id");
         if (!panelId) {
           return;
         }
 
-        if (this.#homeResetPanelId === panelId && this.#homeResetPageLoaded) {
-          this.#homeResetPanelId = null;
-          this.#homeResetPageLoaded = false;
+        // Only the panel's own document moves the reset along. Measured on
+        // Google (2026-10-02): an account-widget iframe commits right after
+        // the top-level STATE_STOP, which would otherwise read as the user
+        // navigating away.
+        if (this.#homeResetPanelId === panelId && webProgress?.isTopLevel !== false) {
+          if (this.#homeResetPhase === "loaded") {
+            this.#homeResetPanelId = null;
+            this.#homeResetPhase = null;
+          } else if (this.#homeResetPhase === "navigating") {
+            this.#homeResetPhase = "arrived";
+          }
         }
         const item = this.#items.find(entry => entry.id === panelId);
         if (item) {
           this.#rememberLocation(item, browser);
         }
         if (panelId === this.#activeId) {
+          this.#ensureEscapeScript(browser);
           this.#updateNavState();
+        }
+      },
+      onStateChange: (browser, webProgress, _request, stateFlags) => {
+        if (
+          this.#homeResetPhase !== "arrived" ||
+          !webProgress?.isTopLevel ||
+          (stateFlags & (STATE_STOP | STATE_IS_WINDOW)) !== (STATE_STOP | STATE_IS_WINDOW)
+        ) {
+          return;
+        }
+        const tab = this.window.gBrowser?.getTabForBrowser?.(browser);
+        if (tab?.getAttribute?.("sine-web-panel-id") === this.#homeResetPanelId) {
+          this.#homeResetPhase = "loaded";
         }
       },
     };
@@ -843,6 +898,7 @@ export class SineWebPanels {
   }
 
   #openPanel(item) {
+    this.#cancelPendingEscape();
     if (this.#fullscreen) {
       return;
     }
@@ -863,7 +919,7 @@ export class SineWebPanels {
     this.#activeParentTab = parentTab;
     if (this.#homeResetPanelId !== item.id) {
       this.#homeResetPanelId = null;
-      this.#homeResetPageLoaded = false;
+      this.#homeResetPhase = null;
     }
     this.#resizer.hidden = false;
     this.#root.setAttribute("open", "true");
@@ -886,6 +942,7 @@ export class SineWebPanels {
   }
 
   #closePanel({ animate = true } = {}) {
+    this.#cancelPendingEscape();
     if (!this.#activeId) {
       return;
     }
@@ -910,7 +967,7 @@ export class SineWebPanels {
     this.#closeTimer = null;
     if (this.#homeResetPanelId === this.#activeId) {
       this.#homeResetPanelId = null;
-      this.#homeResetPageLoaded = false;
+      this.#homeResetPhase = null;
     }
     this.#closeSurface();
     this.#activeId = null;
@@ -939,6 +996,7 @@ export class SineWebPanels {
     panelContainer.classList.add("deck-selected", "sine-web-panels-overlay");
     panelFrame.append(this.#buildNavBar(), this.#resizer);
     panelBrowser.setAttribute("sine-web-panel-selected", "true");
+    this.#ensureEscapeScript(panelBrowser);
     parentBrowser.zenModeActive = true;
     parentBrowser.docShellIsActive = true;
     panelBrowser.zenModeActive = true;
@@ -1156,12 +1214,7 @@ export class SineWebPanels {
       return;
     }
     this.#homeResetPanelId = target.id;
-    this.#homeResetPageLoaded = false;
-    browser.addEventListener("load", () => {
-      if (this.#homeResetPanelId === target.id) {
-        this.#homeResetPageLoaded = true;
-      }
-    }, { once: true, signal: this.#abortController.signal });
+    this.#homeResetPhase = "navigating";
     this.#store.forgetUrl(target.id);
     browser.loadURI(Services.io.newURI(target.url), {
       triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal(),
@@ -2089,6 +2142,36 @@ export class SineWebPanels {
     }
   };
 
+  #onPageEscape(browser, verdict) {
+    if (this.#escapeTimer === null || browser !== this.#activePanelBrowser()) {
+      return;
+    }
+    this.#cancelPendingEscape();
+    if (!verdict?.consumed) {
+      this.#closePanel();
+    }
+  }
+
+  #ensureEscapeScript(browser) {
+    const loader = browser?.frameLoader;
+    if (!loader || this.#escapeScriptLoaders.has(loader)) {
+      return;
+    }
+    try {
+      browser.messageManager?.loadFrameScript(ESCAPE_FRAME_SCRIPT, false);
+      this.#escapeScriptLoaders.add(loader);
+    } catch (error) {
+      console.warn("[Web Panels] Could not load the Escape frame script.", error);
+    }
+  }
+
+  #cancelPendingEscape() {
+    if (this.#escapeTimer !== null) {
+      this.window.clearTimeout(this.#escapeTimer);
+      this.#escapeTimer = null;
+    }
+  }
+
   #onKeyDown = event => {
     // Chrome is hidden in content fullscreen, so the panel shortcuts stay
     // dormant — otherwise Ctrl+Alt+1 would open an invisible panel over the
@@ -2105,6 +2188,16 @@ export class SineWebPanels {
       }
       this.#closeMenu();
       this.#closeEditor();
+      const browser = this.#activePanelBrowser();
+      if (browser && event.target === browser) {
+        // Typed into the panel's page: the page may be closing its own
+        // preview with it. Wait for the escape actor's verdict.
+        this.#escapeTimer ??= this.window.setTimeout(() => {
+          this.#escapeTimer = null;
+          this.#closePanel();
+        }, ESCAPE_REPLY_TIMEOUT);
+        return;
+      }
       this.#closePanel();
       return;
     }

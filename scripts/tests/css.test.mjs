@@ -109,6 +109,13 @@ test("the navigation controls use Zen Glance's circular control treatment", () =
   );
 });
 
+test("only the buttons take the pointer, not the full-height control column", () => {
+  // The column runs the panel's height and sits over the page beside it;
+  // measured in Zen 1.22.3b, an auto column swallowed clicks and wheel there.
+  assert.match(rule(".sine-web-panels-nav"), /pointer-events:\s*none/);
+  assert.match(rule(".sine-web-panels-nav-button"), /pointer-events:\s*auto/);
+});
+
 test("the split action stays at the bottom of the panel and uses Zen's native pin icon", () => {
   const nav = rule(".sine-web-panels-nav");
   const pin = rule(".sine-web-panels-nav-pin");
@@ -135,6 +142,9 @@ test("the page behind an open panel becomes translucent without a black scrim", 
   );
 
   assert.match(viewport, /opacity:\s*0\.5/);
+  // The panel's own container carries .sine-web-panels-overlay, never the
+  // parent-background hook, so no rule may dim the overlay itself.
+  assert.doesNotMatch(css, /\.sine-web-panels-overlay[^{]*\{[^}]*opacity:\s*0\.\d/);
   assert.doesNotMatch(css, /#sine-web-panels-backdrop/);
   assert.doesNotMatch(css, /color-mix\(in srgb, black 50%, transparent\)/);
 });
