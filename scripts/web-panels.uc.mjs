@@ -137,6 +137,20 @@ export function setElementAttributes(element, attrs = {}) {
   }
 }
 
+// Measured 2026-10-05 on Zen 1.23b (Gecko 157): Services.search is undefined;
+// the search service is only reachable as a module. Older builds still have
+// Services.search.
+function searchService() {
+  if (globalThis.Services?.search) {
+    return Services.search;
+  }
+  try {
+    return ChromeUtils.importESModule("moz-src:///toolkit/components/search/SearchService.sys.mjs").SearchService;
+  } catch {
+    return null;
+  }
+}
+
 function sameOrigin(a, b) {
   try {
     return new URL(a).origin === new URL(b).origin;
@@ -2500,7 +2514,7 @@ export class SineWebPanels {
   // anything that does not come back as http(s) is dropped by #openInNewTab.
   async #searchInNewTab(query) {
     try {
-      const engine = await Services.search.getDefault();
+      const engine = await searchService()?.getDefault();
       const url = engine?.getSubmission(query)?.uri?.spec;
       if (url) {
         this.#openInNewTab(url);

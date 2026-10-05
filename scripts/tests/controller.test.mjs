@@ -698,6 +698,37 @@ test("disabling and re-enabling the mod brings the tabs progress listener back, 
   assert.equal(listeners(), 1, "never twice");
 });
 
+test("on builds without Services.search the finder finds the engine through its module", async () => {
+  const { app } = mountWithPanels(["https://mail.example/"]);
+  const opened = [];
+  app.window.openWebLinkIn = (url, where, params) => opened.push(`${url} ${params.triggeringPrincipal?.kind}`);
+  const previousSearch = globalThis.Services.search;
+  const previousChromeUtils = globalThis.ChromeUtils;
+  delete globalThis.Services.search; // measured: undefined on Zen 1.23b / Gecko 157
+  globalThis.ChromeUtils = {
+    importESModule: url => {
+      assert.equal(url, "moz-src:///toolkit/components/search/SearchService.sys.mjs");
+      return {
+        SearchService: {
+          getDefault: async () => ({ getSubmission: q => ({ uri: { spec: `https://www.google.com/search?q=${encodeURIComponent(q)}` } }) }),
+        },
+      };
+    },
+  };
+  try {
+    app.document.dispatch("keydown", keydown("KeyP", { ctrlKey: true, altKey: true }));
+    const input = app.document.querySelector("#sine-web-panels-finder input");
+    input.value = "zen sine mods";
+    input.dispatch("input");
+    app.document.getElementById("sine-web-panels-finder").dispatch("keydown", { key: "Enter", preventDefault() {}, stopPropagation() {} });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(opened, ["https://www.google.com/search?q=zen%20sine%20mods content"]);
+  } finally {
+    globalThis.Services.search = previousSearch;
+    globalThis.ChromeUtils = previousChromeUtils;
+  }
+});
+
 test("pin appends to the right of an existing split group until its fourth pane", () => {
   const { app, ordinary } = mountWithPanels(["https://mail.example/"]);
   const second = app.addTab({ url: "https://second.example/" });
