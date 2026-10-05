@@ -4,9 +4,13 @@ import { test } from "node:test";
 globalThis.Services = {
   scriptSecurityManager: {
     getSystemPrincipal() {
-      return "system-principal";
+      return { kind: "system" };
+    },
+    createContentPrincipal(uri, originAttributes) {
+      return { kind: "content", origin: new URL(uri.spec).origin, originAttributes };
     },
   },
+  io: { newURI: spec => ({ spec }) },
 };
 
 const { WebPanelsRuntime } = await import("../web-panels-runtime.uc.mjs");
@@ -69,8 +73,16 @@ function createWindow() {
     gBrowser: {
       tabs,
       selectedTab: null,
+      // Both exist so a regression back to the trusted variant is caught by
+      // name, not by a missing function.
       addTrustedTab(url, options) {
         calls.push({ name: "addTrustedTab", url, options });
+        const tab = new FakeTab(url);
+        tabs.push(tab);
+        return tab;
+      },
+      addTab(url, options) {
+        calls.push({ name: "addTab", url, options });
         const tab = new FakeTab(url);
         tabs.push(tab);
         return tab;
@@ -108,7 +120,7 @@ function restartWindow(windowRef) {
   windowRef.calls.length = 0;
 }
 
-test("ensurePanelTab creates a trusted hidden tab with panel metadata", () => {
+test("ensurePanelTab creates a hidden tab, loaded as the site itself, with panel metadata", () => {
   const windowRef = createWindow();
   const runtime = new WebPanelsRuntime(windowRef);
   const parentTab = new FakeTab("https://parent.example/");
@@ -120,12 +132,13 @@ test("ensurePanelTab creates a trusted hidden tab with panel metadata", () => {
   );
 
   assert.equal(windowRef.calls.length, 1);
-  assert.equal(windowRef.calls[0].name, "addTrustedTab");
+  assert.equal(windowRef.calls[0].name, "addTab", "addTrustedTab exists to load as the system");
   assert.equal(windowRef.calls[0].url, "https://calendar.example/");
   assert.equal(windowRef.calls[0].options.inBackground, true);
   assert.equal(windowRef.calls[0].options.skipAnimation, true);
   assert.equal(windowRef.calls[0].options.skipBackgroundNotify, true);
-  assert.equal(windowRef.calls[0].options.triggeringPrincipal, "system-principal");
+  assert.equal(windowRef.calls[0].options.triggeringPrincipal.kind, "content");
+  assert.equal(windowRef.calls[0].options.triggeringPrincipal.origin, "https://calendar.example");
   assert.equal(tab.getAttribute("sine-web-panel-tab"), "true");
   assert.equal(tab.getAttribute("sine-web-panel-id"), "panel-1");
   assert.equal(tab.getAttribute("sine-web-panel-parent-id"), "parent-1");

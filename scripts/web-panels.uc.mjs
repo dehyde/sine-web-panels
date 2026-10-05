@@ -6,6 +6,8 @@ import {
   SEPARATOR_TYPE,
   WebPanelsStore,
   clampWebPanelWidth,
+  loadPrincipalFor,
+  prettyPanelName,
   normalizeWebPanelUrl,
   normalizeResizerColor,
   webPanelSideForSidebar,
@@ -21,26 +23,6 @@ import {
 //   "(2) WhatsApp"                                  -> "WhatsApp"
 // Take the trailing segment after a separator, minus any unread-count prefix,
 // so panels name themselves without anyone typing anything.
-function prettyPanelName(rawTitle) {
-  const stripped = String(rawTitle ?? "")
-    .replace(/^\s*[([]\d{1,4}[)\]]\s*/, "")
-    .trim();
-  if (!stripped) {
-    return null;
-  }
-
-  const parts = stripped
-    .split(/\s+[-–—|·:]\s+/)
-    .map(part => part.trim())
-    .filter(Boolean);
-  if (!parts.length) {
-    return stripped;
-  }
-
-  const last = parts[parts.length - 1];
-  // A long trailing segment is a headline, not a site name.
-  return last.length <= 40 ? last : parts[0];
-}
 
 function panelIndexFromEvent(event) {
   const match = /^(?:Digit|Numpad)([0-9])$/.exec(event.code || "");
@@ -131,6 +113,52 @@ function displayCount(count) {
   return Number.isInteger(count) && count > 0 ? (count > 99 ? "99+" : String(count)) : "";
 }
 
+// The only way chrome UI gets attributes. Event-handler attributes (on*) are
+// refused outright: Mozilla's parent-process hardening (meta bug 1935985, CSP
+// on browser.xhtml) exists because of exactly this shape — a Pwn2Own escape,
+// bug 1782102, got the parent to run tab.setAttribute(name, data[name]) with
+// name="onoverflow". Every caller passes literal names today; this keeps it so.
+export function setElementAttributes(element, attrs = {}) {
+  for (const [name, value] of Object.entries(attrs)) {
+    if (value === null || value === undefined || value === false) {
+      continue;
+    }
+    if (/^on/i.test(name)) {
+      console.warn(`[Web Panels] Refused event-handler attribute "${name}".`);
+      continue;
+    }
+    if (name === "class" || name === "className") {
+      element.setAttribute("class", String(value));
+    } else if (name === "hidden" && value === "true") {
+      element.hidden = true;
+    } else {
+      element.setAttribute(name, String(value));
+    }
+  }
+}
+
+// Measured 2026-10-05 on Zen 1.23b (Gecko 157): Services.search is undefined;
+// the search service is only reachable as a module. Older builds still have
+// Services.search.
+function searchService() {
+  if (globalThis.Services?.search) {
+    return Services.search;
+  }
+  try {
+    return ChromeUtils.importESModule("moz-src:///toolkit/components/search/SearchService.sys.mjs").SearchService;
+  } catch {
+    return null;
+  }
+}
+
+function sameOrigin(a, b) {
+  try {
+    return new URL(a).origin === new URL(b).origin;
+  } catch {
+    return false;
+  }
+}
+
 function fallbackFaviconUrl(panelUrl) {
   try {
     return new URL("/favicon.ico", panelUrl).href;
@@ -196,6 +224,11 @@ export class SineWebPanels {
   // can arrive before the reset page commits.
   #homeResetPhase = null;
   #escapeTimer = null;
+  // Panels adopted from a restored session, until their page's origin has
+  // been checked against the panel's own. SessionStore saves wherever the
+  // panel was — an auth provider, a link it followed — while the mod only
+  // ever remembers same-origin URLs (audit 2026-10-02, finding 3).
+  #restoredUnchecked = new Set();
   // Frame scripts live per frame loader; a cross-process navigation brings a
   // new one, which needs the script again.
   #escapeScriptLoaders = new WeakSet();
@@ -211,6 +244,7 @@ export class SineWebPanels {
   init() {
     this.destroyExistingRoot();
     this.#items = this.#store.loadItems({ persistNormalized: true });
+    this.#store.scrubTitles();
     this.#mount();
     this.#runtime = new WebPanelsRuntime(this.window);
     this.#applyEnabledState();
@@ -361,50 +395,7 @@ export class SineWebPanels {
     this.document.addEventListener("click", this.#onDocumentClick, { signal });
     this.document.addEventListener("keydown", this.#onKeyDown, { signal });
     this.window.messageManager?.addMessageListener(ESCAPE_MESSAGE, this.#escapeListener);
-    this.#tabsProgressListener = {
-      onLocationChange: (browser, webProgress, _request, _location, _flags) => {
-        const tab = this.window.gBrowser?.getTabForBrowser?.(browser);
-        const panelId = tab?.getAttribute?.("sine-web-panel-id");
-        if (!panelId) {
-          return;
-        }
-
-        // Only the panel's own document moves the reset along. Measured on
-        // Google (2026-10-02): an account-widget iframe commits right after
-        // the top-level STATE_STOP, which would otherwise read as the user
-        // navigating away.
-        if (this.#homeResetPanelId === panelId && webProgress?.isTopLevel !== false) {
-          if (this.#homeResetPhase === "loaded") {
-            this.#homeResetPanelId = null;
-            this.#homeResetPhase = null;
-          } else if (this.#homeResetPhase === "navigating") {
-            this.#homeResetPhase = "arrived";
-          }
-        }
-        const item = this.#items.find(entry => entry.id === panelId);
-        if (item) {
-          this.#rememberLocation(item, browser);
-        }
-        if (panelId === this.#activeId) {
-          this.#ensureEscapeScript(browser);
-          this.#updateNavState();
-        }
-      },
-      onStateChange: (browser, webProgress, _request, stateFlags) => {
-        if (
-          this.#homeResetPhase !== "arrived" ||
-          !webProgress?.isTopLevel ||
-          (stateFlags & (STATE_STOP | STATE_IS_WINDOW)) !== (STATE_STOP | STATE_IS_WINDOW)
-        ) {
-          return;
-        }
-        const tab = this.window.gBrowser?.getTabForBrowser?.(browser);
-        if (tab?.getAttribute?.("sine-web-panel-id") === this.#homeResetPanelId) {
-          this.#homeResetPhase = "loaded";
-        }
-      },
-    };
-    this.window.gBrowser?.addTabsProgressListener?.(this.#tabsProgressListener);
+    this.#attachTabsProgressListener();
     this.window.gBrowser?.tabContainer?.addEventListener("TabSelect", this.#onTabSelect, { signal });
     this.window.gBrowser?.tabContainer?.addEventListener("TabClose", this.#onTabClose, { signal });
     this.window.gBrowser?.tabContainer?.addEventListener("TabAttrModified", this.#onTabAttrModified, { signal });
@@ -456,6 +447,10 @@ export class SineWebPanels {
     }
 
     const { adopted, swept } = this.#runtime.adoptRestoredTabs(this.#items);
+    for (const id of adopted) {
+      this.#restoredUnchecked.add(id);
+      this.#checkRestoredOrigin(id, this.#runtime.getBrowser(id));
+    }
     if (adopted.length || swept.length) {
       console.log(
         `[Web Panels] Reclaimed ${adopted.length} restored panel tab(s), ` +
@@ -493,12 +488,73 @@ export class SineWebPanels {
     Services.prefs.addObserver(WebPanelsStore.prefs.navigationOrder, this.#prefObserver);
   }
 
+  // Created in #mount and again when the mod is re-enabled: disabling removes
+  // it, and without it last-URL memory, the nav state and the Escape frame
+  // script's re-injection after a process switch all stop (audit 2026-10-02).
+  #attachTabsProgressListener() {
+    if (this.#tabsProgressListener) {
+      return;
+    }
+    this.#tabsProgressListener = this.#createTabsProgressListener();
+    this.window.gBrowser?.addTabsProgressListener?.(this.#tabsProgressListener);
+  }
+
+  #createTabsProgressListener() {
+    return {
+      onLocationChange: (browser, webProgress, _request, _location, _flags) => {
+        const tab = this.window.gBrowser?.getTabForBrowser?.(browser);
+        const panelId = tab?.getAttribute?.("sine-web-panel-id");
+        if (!panelId) {
+          return;
+        }
+
+        // Only the panel's own document moves the reset along. Measured on
+        // Google (2026-10-02): an account-widget iframe commits right after
+        // the top-level STATE_STOP, which would otherwise read as the user
+        // navigating away.
+        if (this.#homeResetPanelId === panelId && webProgress?.isTopLevel !== false) {
+          if (this.#homeResetPhase === "loaded") {
+            this.#homeResetPanelId = null;
+            this.#homeResetPhase = null;
+          } else if (this.#homeResetPhase === "navigating") {
+            this.#homeResetPhase = "arrived";
+          }
+        }
+        if (webProgress?.isTopLevel !== false) {
+          this.#checkRestoredOrigin(panelId, browser);
+        }
+        const item = this.#items.find(entry => entry.id === panelId);
+        if (item) {
+          this.#rememberLocation(item, browser);
+        }
+        if (panelId === this.#activeId) {
+          this.#ensureEscapeScript(browser);
+          this.#updateNavState();
+        }
+      },
+      onStateChange: (browser, webProgress, _request, stateFlags) => {
+        if (
+          this.#homeResetPhase !== "arrived" ||
+          !webProgress?.isTopLevel ||
+          (stateFlags & (STATE_STOP | STATE_IS_WINDOW)) !== (STATE_STOP | STATE_IS_WINDOW)
+        ) {
+          return;
+        }
+        const tab = this.window.gBrowser?.getTabForBrowser?.(browser);
+        if (tab?.getAttribute?.("sine-web-panel-id") === this.#homeResetPanelId) {
+          this.#homeResetPhase = "loaded";
+        }
+      },
+    };
+  }
+
   #applyEnabledState() {
     if (!this.#root) {
       return;
     }
 
     if (this.#store.enabled) {
+      this.#attachTabsProgressListener();
       this.#root.removeAttribute("disabled");
       this.#syncChromeLayout();
       this.#render();
@@ -1170,14 +1226,7 @@ export class SineWebPanels {
       return;
     }
 
-    let sameOrigin = false;
-    try {
-      sameOrigin = new URL(spec).origin === new URL(item.url).origin;
-    } catch {
-      sameOrigin = false;
-    }
-
-    if (sameOrigin) {
+    if (sameOrigin(spec, item.url)) {
       this.#store.rememberUrl(item.id, spec);
     }
   }
@@ -1213,12 +1262,14 @@ export class SineWebPanels {
     if (!target || !browser) {
       return;
     }
+    const triggeringPrincipal = loadPrincipalFor(target.url, this.window);
+    if (!triggeringPrincipal) {
+      return;
+    }
     this.#homeResetPanelId = target.id;
     this.#homeResetPhase = "navigating";
     this.#store.forgetUrl(target.id);
-    browser.loadURI(Services.io.newURI(target.url), {
-      triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal(),
-    });
+    browser.loadURI(Services.io.newURI(target.url), { triggeringPrincipal });
   }
 
   // Promote wherever the panel is now to its configured home. Sites whose URL
@@ -1307,10 +1358,11 @@ export class SineWebPanels {
     let newTab = null;
 
     try {
-      newTab = gBrowser?.addTrustedTab?.(url, {
+      const triggeringPrincipal = loadPrincipalFor(url, this.window);
+      newTab = triggeringPrincipal && gBrowser?.addTab?.(url, {
         inBackground: true,
         skipBackgroundNotify: true,
-        triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal(),
+        triggeringPrincipal,
       });
       if (!newTab) {
         return;
@@ -1598,10 +1650,7 @@ export class SineWebPanels {
       if (url) {
         this.#openInNewTab(url);
       } else {
-        this.window.openTrustedLinkIn?.(
-          this.window.BrowserSearch?.searchURL?.(entry.query) ?? entry.query,
-          "tab"
-        );
+        this.#searchInNewTab(entry.query);
       }
     }
   }
@@ -2142,12 +2191,36 @@ export class SineWebPanels {
     }
   };
 
+  // A restored tab often has no page yet (lazy restore): about:blank until it
+  // is first shown. The check therefore waits for a real top-level location
+  // and runs once; afterwards cross-origin navigation is the user's business.
+  #checkRestoredOrigin(panelId, browser) {
+    if (!this.#restoredUnchecked.has(panelId) || !browser) {
+      return;
+    }
+    const spec = browser.currentURI?.spec ?? "";
+    if (!spec || spec === "about:blank") {
+      return;
+    }
+    this.#restoredUnchecked.delete(panelId);
+    const item = this.#items.find(entry => entry.id === panelId);
+    if (!item || sameOrigin(spec, item.url)) {
+      return;
+    }
+    const url = this.#store.resolveUrl(item);
+    const triggeringPrincipal = loadPrincipalFor(url, this.window);
+    if (triggeringPrincipal) {
+      browser.loadURI(Services.io.newURI(url), { triggeringPrincipal });
+    }
+  }
+
   #onPageEscape(browser, verdict) {
     if (this.#escapeTimer === null || browser !== this.#activePanelBrowser()) {
       return;
     }
     this.#cancelPendingEscape();
-    if (!verdict?.consumed) {
+    // Strict: the verdict comes from a content process.
+    if (verdict?.consumed !== true) {
       this.#closePanel();
     }
   }
@@ -2435,16 +2508,34 @@ export class SineWebPanels {
     return tab?.getAttribute?.("sine-web-panel-tab") === "true";
   }
 
+  // The finder's "Search for …" row. It used to hand the raw text to
+  // openTrustedLinkIn when BrowserSearch.searchURL was missing — a system
+  // principal load of whatever was typed. The default engine builds the URL;
+  // anything that does not come back as http(s) is dropped by #openInNewTab.
+  async #searchInNewTab(query) {
+    try {
+      const engine = await searchService()?.getDefault();
+      const url = engine?.getSubmission(query)?.uri?.spec;
+      if (url) {
+        this.#openInNewTab(url);
+      }
+    } catch (error) {
+      console.warn("[Web Panels] Could not build a search URL.", error);
+    }
+  }
+
+  // openWebLinkIn / addTab rather than their Trusted twins, which exist to
+  // load with the system principal.
   #openInNewTab(url) {
-    if (typeof this.window.openTrustedLinkIn === "function") {
-      this.window.openTrustedLinkIn(url, "tab", {
-        triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal(),
-      });
+    const triggeringPrincipal = loadPrincipalFor(url, this.window);
+    if (!triggeringPrincipal) {
       return;
     }
-    this.window.gBrowser?.addTrustedTab?.(url, {
-      triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal(),
-    });
+    if (typeof this.window.openWebLinkIn === "function") {
+      this.window.openWebLinkIn(url, "tab", { triggeringPrincipal });
+      return;
+    }
+    this.window.gBrowser?.addTab?.(url, { triggeringPrincipal });
   }
 
   #findItemElement(id) {
@@ -2486,18 +2577,7 @@ export class SineWebPanels {
   }
 
   #setAttributes(element, attrs = {}) {
-    for (const [name, value] of Object.entries(attrs)) {
-      if (value === null || value === undefined || value === false) {
-        continue;
-      }
-      if (name === "class" || name === "className") {
-        element.setAttribute("class", String(value));
-      } else if (name === "hidden" && value === "true") {
-        element.hidden = true;
-      } else {
-        element.setAttribute(name, String(value));
-      }
-    }
+    setElementAttributes(element, attrs);
   }
 }
 

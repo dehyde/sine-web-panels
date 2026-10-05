@@ -1,3 +1,5 @@
+import { loadPrincipalFor } from "./web-panels-store.uc.mjs";
+
 // A DOM attribute does not survive a restart — SessionStore persists only what
 // it is told to keep — so the tab that comes back has none of our marks and
 // reads as an ordinary tab. A custom tab value does survive, and carries the
@@ -213,19 +215,19 @@ export class WebPanelsRuntime {
     }
   }
 
+  // addTab, not addTrustedTab: the trusted variant exists to supply the system
+  // principal, which is exactly what panel loads must not use.
   #createPanelTab(item, url) {
-    const options = {
+    const triggeringPrincipal = loadPrincipalFor(url, this.#window);
+    if (!triggeringPrincipal) {
+      return null;
+    }
+    return this.#window.gBrowser.addTab(url, {
       inBackground: true,
       skipAnimation: true,
       skipBackgroundNotify: true,
-      triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal(),
-    };
-
-    if (typeof this.#window.gBrowser.addTrustedTab === "function") {
-      return this.#window.gBrowser.addTrustedTab(url, options);
-    }
-
-    return this.#window.gBrowser.addTab(url, options);
+      triggeringPrincipal,
+    });
   }
 
   #setParentTabAttribute(tab, parentTab) {

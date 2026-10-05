@@ -154,6 +154,15 @@ export class FakeElement {
     }
   }
 
+  prepend(...nodes) {
+    for (const node of nodes.reverse()) {
+      if (!node) continue;
+      node.parentNode?.removeChild?.(node);
+      node.parentNode = this;
+      this.children.unshift(node);
+    }
+  }
+
   appendChild(node) {
     this.append(node);
     return node;
@@ -209,6 +218,8 @@ export class FakeElement {
   matches(selector) {
     return matchesCompound(this, lastCompound(selector));
   }
+
+  scrollIntoView() {}
 
   closest(selector) {
     let node = this;
@@ -475,7 +486,15 @@ export function createChromeWindow({ prefs = {}, viewportWidth = 1600 } = {}) {
       },
       tabContainer: new FakeElement("tabs", document),
       tabpanels: null,
-      addTrustedTab(url) {
+      // Every load the controller starts, with the principal it asked for, so
+      // tests can assert that nothing loads web content as the system.
+      loads: [],
+      addTrustedTab(url, options = {}) {
+        this.loads.push({ via: "addTrustedTab", url, principal: options.triggeringPrincipal });
+        return this._addTab(url);
+      },
+      addTab(url, options = {}) {
+        this.loads.push({ via: "addTab", url, principal: options.triggeringPrincipal });
         return this._addTab(url);
       },
       // Builds the slice of Zen's tab deck that #openSurface anchors to:
@@ -547,7 +566,14 @@ export function createChromeWindow({ prefs = {}, viewportWidth = 1600 } = {}) {
         if (index !== -1) list.splice(index, 1);
       },
     },
-    scriptSecurityManager: { getSystemPrincipal: () => "system-principal" },
+    scriptSecurityManager: {
+      getSystemPrincipal: () => ({ kind: "system" }),
+      createContentPrincipal: (uri, originAttributes) => ({
+        kind: "content",
+        origin: new URL(uri.spec).origin,
+        originAttributes,
+      }),
+    },
     io: { newURI: spec => ({ spec }) },
   };
 
