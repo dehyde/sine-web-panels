@@ -132,6 +132,14 @@ function displayCount(count) {
   return Number.isInteger(count) && count > 0 ? (count > 99 ? "99+" : String(count)) : "";
 }
 
+function sameOrigin(a, b) {
+  try {
+    return new URL(a).origin === new URL(b).origin;
+  } catch {
+    return false;
+  }
+}
+
 function fallbackFaviconUrl(panelUrl) {
   try {
     return new URL("/favicon.ico", panelUrl).href;
@@ -197,6 +205,11 @@ export class SineWebPanels {
   // can arrive before the reset page commits.
   #homeResetPhase = null;
   #escapeTimer = null;
+  // Panels adopted from a restored session, until their page's origin has
+  // been checked against the panel's own. SessionStore saves wherever the
+  // panel was — an auth provider, a link it followed — while the mod only
+  // ever remembers same-origin URLs (audit 2026-10-02, finding 3).
+  #restoredUnchecked = new Set();
   // Frame scripts live per frame loader; a cross-process navigation brings a
   // new one, which needs the script again.
   #escapeScriptLoaders = new WeakSet();
@@ -382,6 +395,9 @@ export class SineWebPanels {
             this.#homeResetPhase = "arrived";
           }
         }
+        if (webProgress?.isTopLevel !== false) {
+          this.#checkRestoredOrigin(panelId, browser);
+        }
         const item = this.#items.find(entry => entry.id === panelId);
         if (item) {
           this.#rememberLocation(item, browser);
@@ -457,6 +473,10 @@ export class SineWebPanels {
     }
 
     const { adopted, swept } = this.#runtime.adoptRestoredTabs(this.#items);
+    for (const id of adopted) {
+      this.#restoredUnchecked.add(id);
+      this.#checkRestoredOrigin(id, this.#runtime.getBrowser(id));
+    }
     if (adopted.length || swept.length) {
       console.log(
         `[Web Panels] Reclaimed ${adopted.length} restored panel tab(s), ` +
@@ -1171,14 +1191,7 @@ export class SineWebPanels {
       return;
     }
 
-    let sameOrigin = false;
-    try {
-      sameOrigin = new URL(spec).origin === new URL(item.url).origin;
-    } catch {
-      sameOrigin = false;
-    }
-
-    if (sameOrigin) {
+    if (sameOrigin(spec, item.url)) {
       this.#store.rememberUrl(item.id, spec);
     }
   }
@@ -2142,6 +2155,29 @@ export class SineWebPanels {
       this.#closePanel();
     }
   };
+
+  // A restored tab often has no page yet (lazy restore): about:blank until it
+  // is first shown. The check therefore waits for a real top-level location
+  // and runs once; afterwards cross-origin navigation is the user's business.
+  #checkRestoredOrigin(panelId, browser) {
+    if (!this.#restoredUnchecked.has(panelId) || !browser) {
+      return;
+    }
+    const spec = browser.currentURI?.spec ?? "";
+    if (!spec || spec === "about:blank") {
+      return;
+    }
+    this.#restoredUnchecked.delete(panelId);
+    const item = this.#items.find(entry => entry.id === panelId);
+    if (!item || sameOrigin(spec, item.url)) {
+      return;
+    }
+    const url = this.#store.resolveUrl(item);
+    const triggeringPrincipal = loadPrincipalFor(url, this.window);
+    if (triggeringPrincipal) {
+      browser.loadURI(Services.io.newURI(url), { triggeringPrincipal });
+    }
+  }
 
   #onPageEscape(browser, verdict) {
     if (this.#escapeTimer === null || browser !== this.#activePanelBrowser()) {

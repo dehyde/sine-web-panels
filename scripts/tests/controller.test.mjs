@@ -609,6 +609,49 @@ test("the finder's search row asks the default engine and opens the result as th
   }
 });
 
+// --------------------------------------------------------------------------
+// A restored panel tab comes back wherever the session saved it. The mod only
+// remembers same-origin URLs, so a cross-origin page from the session (an
+// auth provider, a followed link) is sent back to the panel's own site once.
+// --------------------------------------------------------------------------
+
+function restoredPanelAt(url) {
+  const { app } = mountWithPanels(["https://mail.example/inbox"]);
+  const tab = app.addTab({ url });
+  app.window.SessionStore.setCustomTabValue(tab, "sineWebPanelBacking", "panel-1");
+  const loads = [];
+  tab.linkedBrowser.loadURI = (uri, options) =>
+    loads.push(`${uri.spec} ${options.triggeringPrincipal?.kind}:${options.triggeringPrincipal?.origin}`);
+  app.notify("sessionstore-windows-restored");
+  return { app, tab, browser: tab.linkedBrowser, loads };
+}
+
+test("a panel restored on another site's page is sent back to its own site", () => {
+  const { tab, loads } = restoredPanelAt("https://accounts.example/login");
+
+  assert.equal(tab.getAttribute("sine-web-panel-id"), "panel-1", "adopted as the panel's backing");
+  assert.deepEqual(loads, ["https://mail.example/inbox content:https://mail.example"]);
+});
+
+test("a lazily restored panel is checked when its page first arrives, and only then", () => {
+  const { app, browser, loads } = restoredPanelAt("about:blank");
+  assert.deepEqual(loads, [], "nothing to judge on a blank page");
+
+  browser.currentURI.spec = "https://phish.example/";
+  progress(app, browser).commit();
+  assert.deepEqual(loads, ["https://mail.example/inbox content:https://mail.example"]);
+
+  browser.currentURI.spec = "https://docs.example/shared";
+  progress(app, browser).commit();
+  assert.equal(loads.length, 1, "after the first check, where the user goes is the user's business");
+});
+
+test("a panel restored on its own site is left where it was", () => {
+  const { loads } = restoredPanelAt("https://mail.example/thread/7");
+
+  assert.deepEqual(loads, []);
+});
+
 test("pin appends to the right of an existing split group until its fourth pane", () => {
   const { app, ordinary } = mountWithPanels(["https://mail.example/"]);
   const second = app.addTab({ url: "https://second.example/" });
