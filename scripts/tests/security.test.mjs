@@ -60,3 +60,17 @@ test("shipped scripts never request the system principal or its Trusted helpers"
     }
   }
 });
+
+test("chrome UI never gets an event-handler attribute, whatever a caller passes", async () => {
+  const { setElementAttributes } = await import("../web-panels.uc.mjs");
+  const set = [];
+  const element = { setAttribute: (name, value) => set.push(`${name}=${value}`) };
+  const warn = console.warn;
+  console.warn = () => {};
+  try {
+    setElementAttributes(element, { onclick: "x", ONLOAD: "y", onoverflow: "z", class: "rail", title: "Mail", open: "true" });
+  } finally {
+    console.warn = warn;
+  }
+  assert.deepEqual(set, ["class=rail", "title=Mail", "open=true"]);
+});

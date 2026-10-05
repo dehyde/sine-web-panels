@@ -43,6 +43,15 @@
   // The frame message manager is the content docshell's chrome event handler,
   // so this capture listener runs before any of the page's own listeners.
   addEventListener("keydown", event => {
+    try {
+      reportEscape(event);
+    } catch {
+      // A page torn down mid-key (navigation, closed frame) throws dead-object
+      // errors; chrome then falls back to its own timeout and closes as before.
+    }
+  }, true);
+
+  function reportEscape(event) {
     if (event.key !== "Escape" || event.repeat) {
       return;
     }
@@ -56,15 +65,19 @@
     const topBefore = topAtCentre(win);
 
     win.setTimeout(() => {
-      const overlaysAfter = visibleOverlays(document);
-      const topAfter = topAtCentre(win);
-      const topChanged = topAfter !== topBefore;
-      sendAsyncMessage("SineWebPanels:Escape", {
-        consumed: topChanged || overlaysAfter < overlaysBefore,
-        topChanged,
-        overlaysBefore,
-        overlaysAfter,
-      });
+      try {
+        const overlaysAfter = visibleOverlays(document);
+        const topAfter = topAtCentre(win);
+        const topChanged = topAfter !== topBefore;
+        sendAsyncMessage("SineWebPanels:Escape", {
+          consumed: topChanged || overlaysAfter < overlaysBefore,
+          topChanged,
+          overlaysBefore,
+          overlaysAfter,
+        });
+      } catch {
+        // The page went away while it settled; the chrome timeout covers it.
+      }
     }, SETTLE_MS);
-  }, true);
+  }
 }).call(this);

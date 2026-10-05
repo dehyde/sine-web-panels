@@ -121,3 +121,15 @@ test("loading it twice into the same frame does not double the reports", () => {
   assert.equal(frame.listeners.length, 1);
   assert.equal(frame.messages.length, 1);
 });
+
+test("a page torn down mid-key never throws out of the frame script", () => {
+  const page = fakePage();
+  const frame = loadFrameScript(page);
+  page.win.document.elementFromPoint = () => {
+    throw new Error("can't access dead object");
+  };
+
+  assert.doesNotThrow(() => frame.press());
+  page.runTasks();
+  assert.equal(frame.messages.length, 0, "no verdict: chrome's own timeout decides");
+});

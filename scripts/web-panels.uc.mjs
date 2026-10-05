@@ -113,6 +113,30 @@ function displayCount(count) {
   return Number.isInteger(count) && count > 0 ? (count > 99 ? "99+" : String(count)) : "";
 }
 
+// The only way chrome UI gets attributes. Event-handler attributes (on*) are
+// refused outright: Mozilla's parent-process hardening (meta bug 1935985, CSP
+// on browser.xhtml) exists because of exactly this shape — a Pwn2Own escape,
+// bug 1782102, got the parent to run tab.setAttribute(name, data[name]) with
+// name="onoverflow". Every caller passes literal names today; this keeps it so.
+export function setElementAttributes(element, attrs = {}) {
+  for (const [name, value] of Object.entries(attrs)) {
+    if (value === null || value === undefined || value === false) {
+      continue;
+    }
+    if (/^on/i.test(name)) {
+      console.warn(`[Web Panels] Refused event-handler attribute "${name}".`);
+      continue;
+    }
+    if (name === "class" || name === "className") {
+      element.setAttribute("class", String(value));
+    } else if (name === "hidden" && value === "true") {
+      element.hidden = true;
+    } else {
+      element.setAttribute(name, String(value));
+    }
+  }
+}
+
 function sameOrigin(a, b) {
   try {
     return new URL(a).origin === new URL(b).origin;
@@ -2181,7 +2205,8 @@ export class SineWebPanels {
       return;
     }
     this.#cancelPendingEscape();
-    if (!verdict?.consumed) {
+    // Strict: the verdict comes from a content process.
+    if (verdict?.consumed !== true) {
       this.#closePanel();
     }
   }
@@ -2538,18 +2563,7 @@ export class SineWebPanels {
   }
 
   #setAttributes(element, attrs = {}) {
-    for (const [name, value] of Object.entries(attrs)) {
-      if (value === null || value === undefined || value === false) {
-        continue;
-      }
-      if (name === "class" || name === "className") {
-        element.setAttribute("class", String(value));
-      } else if (name === "hidden" && value === "true") {
-        element.hidden = true;
-      } else {
-        element.setAttribute(name, String(value));
-      }
-    }
+    setElementAttributes(element, attrs);
   }
 }
 

@@ -937,6 +937,14 @@ test("Escape that closes the page's own preview leaves the panel open; the next 
   assert.equal(isOpen(), false, "nothing left in the page to close: the panel goes");
 });
 
+test("only a strict consumed === true from the page keeps the panel open", () => {
+  const { app, browser, isOpen, escapeInPage } = openPanelWithPage();
+
+  escapeInPage();
+  app.window.messageManager.deliver(ESCAPE_MESSAGE, browser, { consumed: "yes" });
+  assert.equal(isOpen(), false, "a content process does not get to be vague");
+});
+
 test("with no answer from the page the panel still closes, after the bounded wait", () => {
   const { app, isOpen, escapeInPage } = openPanelWithPage();
 
