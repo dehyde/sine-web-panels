@@ -685,6 +685,19 @@ test("a panel's title is remembered as its site name, never the full tab title",
   assert.equal(JSON.stringify(storedTitles(app)).includes("@"), false, "no address at rest");
 });
 
+test("disabling and re-enabling the mod brings the tabs progress listener back, once", () => {
+  const { app } = mountWithPanels(["https://mail.example/"]);
+  const listeners = () => app.window.gBrowser.progressListeners.length;
+  assert.equal(listeners(), 1);
+
+  app.prefs.setBoolPref(PREFS.enabled, false);
+  assert.equal(listeners(), 0);
+  app.prefs.setBoolPref(PREFS.enabled, true);
+  assert.equal(listeners(), 1, "without it, URL memory and the Escape script re-injection stop");
+  app.prefs.setBoolPref(PREFS.enabled, true);
+  assert.equal(listeners(), 1, "never twice");
+});
+
 test("pin appends to the right of an existing split group until its fourth pane", () => {
   const { app, ordinary } = mountWithPanels(["https://mail.example/"]);
   const second = app.addTab({ url: "https://second.example/" });

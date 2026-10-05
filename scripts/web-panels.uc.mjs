@@ -357,53 +357,7 @@ export class SineWebPanels {
     this.document.addEventListener("click", this.#onDocumentClick, { signal });
     this.document.addEventListener("keydown", this.#onKeyDown, { signal });
     this.window.messageManager?.addMessageListener(ESCAPE_MESSAGE, this.#escapeListener);
-    this.#tabsProgressListener = {
-      onLocationChange: (browser, webProgress, _request, _location, _flags) => {
-        const tab = this.window.gBrowser?.getTabForBrowser?.(browser);
-        const panelId = tab?.getAttribute?.("sine-web-panel-id");
-        if (!panelId) {
-          return;
-        }
-
-        // Only the panel's own document moves the reset along. Measured on
-        // Google (2026-10-02): an account-widget iframe commits right after
-        // the top-level STATE_STOP, which would otherwise read as the user
-        // navigating away.
-        if (this.#homeResetPanelId === panelId && webProgress?.isTopLevel !== false) {
-          if (this.#homeResetPhase === "loaded") {
-            this.#homeResetPanelId = null;
-            this.#homeResetPhase = null;
-          } else if (this.#homeResetPhase === "navigating") {
-            this.#homeResetPhase = "arrived";
-          }
-        }
-        if (webProgress?.isTopLevel !== false) {
-          this.#checkRestoredOrigin(panelId, browser);
-        }
-        const item = this.#items.find(entry => entry.id === panelId);
-        if (item) {
-          this.#rememberLocation(item, browser);
-        }
-        if (panelId === this.#activeId) {
-          this.#ensureEscapeScript(browser);
-          this.#updateNavState();
-        }
-      },
-      onStateChange: (browser, webProgress, _request, stateFlags) => {
-        if (
-          this.#homeResetPhase !== "arrived" ||
-          !webProgress?.isTopLevel ||
-          (stateFlags & (STATE_STOP | STATE_IS_WINDOW)) !== (STATE_STOP | STATE_IS_WINDOW)
-        ) {
-          return;
-        }
-        const tab = this.window.gBrowser?.getTabForBrowser?.(browser);
-        if (tab?.getAttribute?.("sine-web-panel-id") === this.#homeResetPanelId) {
-          this.#homeResetPhase = "loaded";
-        }
-      },
-    };
-    this.window.gBrowser?.addTabsProgressListener?.(this.#tabsProgressListener);
+    this.#attachTabsProgressListener();
     this.window.gBrowser?.tabContainer?.addEventListener("TabSelect", this.#onTabSelect, { signal });
     this.window.gBrowser?.tabContainer?.addEventListener("TabClose", this.#onTabClose, { signal });
     this.window.gBrowser?.tabContainer?.addEventListener("TabAttrModified", this.#onTabAttrModified, { signal });
@@ -496,12 +450,73 @@ export class SineWebPanels {
     Services.prefs.addObserver(WebPanelsStore.prefs.navigationOrder, this.#prefObserver);
   }
 
+  // Created in #mount and again when the mod is re-enabled: disabling removes
+  // it, and without it last-URL memory, the nav state and the Escape frame
+  // script's re-injection after a process switch all stop (audit 2026-10-02).
+  #attachTabsProgressListener() {
+    if (this.#tabsProgressListener) {
+      return;
+    }
+    this.#tabsProgressListener = this.#createTabsProgressListener();
+    this.window.gBrowser?.addTabsProgressListener?.(this.#tabsProgressListener);
+  }
+
+  #createTabsProgressListener() {
+    return {
+      onLocationChange: (browser, webProgress, _request, _location, _flags) => {
+        const tab = this.window.gBrowser?.getTabForBrowser?.(browser);
+        const panelId = tab?.getAttribute?.("sine-web-panel-id");
+        if (!panelId) {
+          return;
+        }
+
+        // Only the panel's own document moves the reset along. Measured on
+        // Google (2026-10-02): an account-widget iframe commits right after
+        // the top-level STATE_STOP, which would otherwise read as the user
+        // navigating away.
+        if (this.#homeResetPanelId === panelId && webProgress?.isTopLevel !== false) {
+          if (this.#homeResetPhase === "loaded") {
+            this.#homeResetPanelId = null;
+            this.#homeResetPhase = null;
+          } else if (this.#homeResetPhase === "navigating") {
+            this.#homeResetPhase = "arrived";
+          }
+        }
+        if (webProgress?.isTopLevel !== false) {
+          this.#checkRestoredOrigin(panelId, browser);
+        }
+        const item = this.#items.find(entry => entry.id === panelId);
+        if (item) {
+          this.#rememberLocation(item, browser);
+        }
+        if (panelId === this.#activeId) {
+          this.#ensureEscapeScript(browser);
+          this.#updateNavState();
+        }
+      },
+      onStateChange: (browser, webProgress, _request, stateFlags) => {
+        if (
+          this.#homeResetPhase !== "arrived" ||
+          !webProgress?.isTopLevel ||
+          (stateFlags & (STATE_STOP | STATE_IS_WINDOW)) !== (STATE_STOP | STATE_IS_WINDOW)
+        ) {
+          return;
+        }
+        const tab = this.window.gBrowser?.getTabForBrowser?.(browser);
+        if (tab?.getAttribute?.("sine-web-panel-id") === this.#homeResetPanelId) {
+          this.#homeResetPhase = "loaded";
+        }
+      },
+    };
+  }
+
   #applyEnabledState() {
     if (!this.#root) {
       return;
     }
 
     if (this.#store.enabled) {
+      this.#attachTabsProgressListener();
       this.#root.removeAttribute("disabled");
       this.#syncChromeLayout();
       this.#render();
