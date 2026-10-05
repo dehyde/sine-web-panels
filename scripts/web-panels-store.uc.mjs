@@ -207,6 +207,33 @@ export function normalizeWebPanelUrl(rawUrl) {
   }
 }
 
+// The triggering principal for every page load the mod starts. It used to be
+// the system principal; with it, the redirect-time CheckLoadURI is a
+// pass-through, so a panel's server (or a MITM on an http: panel) answering
+// 302 → file:/about:/chrome: was not stopped the way it is for a page's own
+// navigation (audit 2026-10-02). The destination's own content principal keeps
+// the load same-site, so SameSite=Strict cookies are still sent — a null
+// principal would make it a cross-site navigation and open some sites logged
+// out — and Firefox blocks those redirects. Anything but http(s) gets no
+// principal at all, so a caller cannot load it.
+export function loadPrincipalFor(url, chromeWindow = null) {
+  let parsed;
+  try {
+    parsed = new URL(String(url));
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    return null;
+  }
+  const href = parsed.href;
+  const privateBrowsing = chromeWindow?.PrivateBrowsingUtils?.isWindowPrivate?.(chromeWindow) === true;
+  return Services.scriptSecurityManager.createContentPrincipal(
+    Services.io.newURI(href),
+    privateBrowsing ? { privateBrowsingId: 1 } : {}
+  );
+}
+
 export function titleFromUrl(url) {
   try {
     return new URL(url).hostname.replace(/^www\./, "");

@@ -6,6 +6,7 @@ import {
   SEPARATOR_TYPE,
   WebPanelsStore,
   clampWebPanelWidth,
+  loadPrincipalFor,
   normalizeWebPanelUrl,
   normalizeResizerColor,
   webPanelSideForSidebar,
@@ -1213,12 +1214,14 @@ export class SineWebPanels {
     if (!target || !browser) {
       return;
     }
+    const triggeringPrincipal = loadPrincipalFor(target.url, this.window);
+    if (!triggeringPrincipal) {
+      return;
+    }
     this.#homeResetPanelId = target.id;
     this.#homeResetPhase = "navigating";
     this.#store.forgetUrl(target.id);
-    browser.loadURI(Services.io.newURI(target.url), {
-      triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal(),
-    });
+    browser.loadURI(Services.io.newURI(target.url), { triggeringPrincipal });
   }
 
   // Promote wherever the panel is now to its configured home. Sites whose URL
@@ -1307,10 +1310,11 @@ export class SineWebPanels {
     let newTab = null;
 
     try {
-      newTab = gBrowser?.addTrustedTab?.(url, {
+      const triggeringPrincipal = loadPrincipalFor(url, this.window);
+      newTab = triggeringPrincipal && gBrowser?.addTab?.(url, {
         inBackground: true,
         skipBackgroundNotify: true,
-        triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal(),
+        triggeringPrincipal,
       });
       if (!newTab) {
         return;
@@ -1598,10 +1602,7 @@ export class SineWebPanels {
       if (url) {
         this.#openInNewTab(url);
       } else {
-        this.window.openTrustedLinkIn?.(
-          this.window.BrowserSearch?.searchURL?.(entry.query) ?? entry.query,
-          "tab"
-        );
+        this.#searchInNewTab(entry.query);
       }
     }
   }
@@ -2435,16 +2436,34 @@ export class SineWebPanels {
     return tab?.getAttribute?.("sine-web-panel-tab") === "true";
   }
 
+  // The finder's "Search for …" row. It used to hand the raw text to
+  // openTrustedLinkIn when BrowserSearch.searchURL was missing — a system
+  // principal load of whatever was typed. The default engine builds the URL;
+  // anything that does not come back as http(s) is dropped by #openInNewTab.
+  async #searchInNewTab(query) {
+    try {
+      const engine = await Services.search.getDefault();
+      const url = engine?.getSubmission(query)?.uri?.spec;
+      if (url) {
+        this.#openInNewTab(url);
+      }
+    } catch (error) {
+      console.warn("[Web Panels] Could not build a search URL.", error);
+    }
+  }
+
+  // openWebLinkIn / addTab rather than their Trusted twins, which exist to
+  // load with the system principal.
   #openInNewTab(url) {
-    if (typeof this.window.openTrustedLinkIn === "function") {
-      this.window.openTrustedLinkIn(url, "tab", {
-        triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal(),
-      });
+    const triggeringPrincipal = loadPrincipalFor(url, this.window);
+    if (!triggeringPrincipal) {
       return;
     }
-    this.window.gBrowser?.addTrustedTab?.(url, {
-      triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal(),
-    });
+    if (typeof this.window.openWebLinkIn === "function") {
+      this.window.openWebLinkIn(url, "tab", { triggeringPrincipal });
+      return;
+    }
+    this.window.gBrowser?.addTab?.(url, { triggeringPrincipal });
   }
 
   #findItemElement(id) {

@@ -556,6 +556,59 @@ test("pin opens the panel's current location in a native split view, then closes
   assert.equal(app.root().hasAttribute("open"), false, "the Web Panel closes after the native split succeeds");
 });
 
+// --------------------------------------------------------------------------
+// No load the mod starts may use the system principal (security audit
+// 2026-10-02): with it, a redirect to file:/about:/chrome: is not checked.
+// Principals are compared by kind and origin, never as objects.
+// --------------------------------------------------------------------------
+
+const principalOf = load => `${load.principal?.kind}:${load.principal?.origin}`;
+
+test("panel creation, Split View and Home load as the site itself, never as the system", () => {
+  const { app } = mountWithPanels(["https://mail.example/inbox"]);
+  installSplitView(app);
+  const gBrowser = app.window.gBrowser;
+
+  railButton(app, "panel-1").dispatch("click");
+  const browser = gBrowser.selectedTab.linkedBrowser;
+  browser.currentURI.spec = "https://mail.example/thread/7";
+  navOf(app).querySelector(".sine-web-panels-nav-pin").dispatch("click");
+  assert.deepEqual(
+    gBrowser.loads.map(load => `${load.via} ${principalOf(load)}`),
+    ["addTab content:https://mail.example", "addTab content:https://mail.example"],
+    "the panel tab and the split tab"
+  );
+
+  railButton(app, "panel-1").dispatch("click");
+  let homePrincipal = null;
+  gBrowser.selectedTab.linkedBrowser.loadURI = (_uri, options) => (homePrincipal = options.triggeringPrincipal);
+  navOf(app).querySelector(".sine-web-panels-nav-home").dispatch("click");
+  assert.equal(`${homePrincipal?.kind}:${homePrincipal?.origin}`, "content:https://mail.example");
+});
+
+test("the finder's search row asks the default engine and opens the result as that site", async () => {
+  const { app } = mountWithPanels(["https://mail.example/"]);
+  const opened = [];
+  app.window.openWebLinkIn = (url, where, params) => opened.push(`${where} ${url} ${params.triggeringPrincipal?.kind}`);
+  const previous = globalThis.Services.search;
+  globalThis.Services.search = {
+    getDefault: async () => ({
+      getSubmission: query => ({ uri: { spec: `https://search.example/?q=${encodeURIComponent(query)}` } }),
+    }),
+  };
+  try {
+    app.document.dispatch("keydown", keydown("KeyP", { ctrlKey: true, altKey: true }));
+    const input = app.document.querySelector("#sine-web-panels-finder input");
+    input.value = "javascript:alert(1)";
+    input.dispatch("input");
+    app.document.getElementById("sine-web-panels-finder").dispatch("keydown", { key: "Enter", preventDefault() {}, stopPropagation() {} });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(opened, ["tab https://search.example/?q=javascript%3Aalert(1) content"], "typed text is a search, never a URL to load");
+  } finally {
+    globalThis.Services.search = previous;
+  }
+});
+
 test("pin appends to the right of an existing split group until its fourth pane", () => {
   const { app, ordinary } = mountWithPanels(["https://mail.example/"]);
   const second = app.addTab({ url: "https://second.example/" });
