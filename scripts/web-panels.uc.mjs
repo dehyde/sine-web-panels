@@ -7,6 +7,7 @@ import {
   WebPanelsStore,
   clampWebPanelWidth,
   loadPrincipalFor,
+  prettyPanelName,
   normalizeWebPanelUrl,
   normalizeResizerColor,
   webPanelSideForSidebar,
@@ -22,26 +23,6 @@ import {
 //   "(2) WhatsApp"                                  -> "WhatsApp"
 // Take the trailing segment after a separator, minus any unread-count prefix,
 // so panels name themselves without anyone typing anything.
-function prettyPanelName(rawTitle) {
-  const stripped = String(rawTitle ?? "")
-    .replace(/^\s*[([]\d{1,4}[)\]]\s*/, "")
-    .trim();
-  if (!stripped) {
-    return null;
-  }
-
-  const parts = stripped
-    .split(/\s+[-–—|·:]\s+/)
-    .map(part => part.trim())
-    .filter(Boolean);
-  if (!parts.length) {
-    return stripped;
-  }
-
-  const last = parts[parts.length - 1];
-  // A long trailing segment is a headline, not a site name.
-  return last.length <= 40 ? last : parts[0];
-}
 
 function panelIndexFromEvent(event) {
   const match = /^(?:Digit|Numpad)([0-9])$/.exec(event.code || "");
@@ -225,6 +206,7 @@ export class SineWebPanels {
   init() {
     this.destroyExistingRoot();
     this.#items = this.#store.loadItems({ persistNormalized: true });
+    this.#store.scrubTitles();
     this.#mount();
     this.#runtime = new WebPanelsRuntime(this.window);
     this.#applyEnabledState();

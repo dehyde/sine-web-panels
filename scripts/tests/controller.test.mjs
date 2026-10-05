@@ -652,6 +652,39 @@ test("a panel restored on its own site is left where it was", () => {
   assert.deepEqual(loads, []);
 });
 
+// --------------------------------------------------------------------------
+// Remembered titles keep only the site name: the full tab title is personal
+// data (Gmail's carries the account address) and nothing shows more than the
+// site name anyway.
+// --------------------------------------------------------------------------
+
+const TITLES_PREF = "sine.web-panels.last-titles";
+const storedTitles = app => JSON.parse(app.prefs.getStringPref(TITLES_PREF, "{}"));
+
+test("titles stored by older versions are reduced to the site name at startup", () => {
+  const items = [{ type: "panel", id: "panel-1", url: "https://mail.example/" }];
+  const app = mount({
+    prefs: {
+      [PREFS.items]: JSON.stringify(items),
+      [TITLES_PREF]: JSON.stringify({ "panel-1": "Inbox (1,140) - someone@gmail.com - Gmail" }),
+    },
+  });
+
+  assert.deepEqual(storedTitles(app), { "panel-1": "Gmail" });
+});
+
+test("a panel's title is remembered as its site name, never the full tab title", () => {
+  const { app } = mountWithPanels(["https://mail.example/"]);
+  railButton(app, "panel-1").dispatch("click");
+  const tab = app.window.gBrowser.selectedTab;
+
+  tab.label = "(3) Inbox - someone@gmail.com - Gmail";
+  app.window.gBrowser.tabContainer.dispatch("TabAttrModified", { target: tab });
+
+  assert.equal(storedTitles(app)["panel-1"], "Gmail");
+  assert.equal(JSON.stringify(storedTitles(app)).includes("@"), false, "no address at rest");
+});
+
 test("pin appends to the right of an existing split group until its fourth pane", () => {
   const { app, ordinary } = mountWithPanels(["https://mail.example/"]);
   const second = app.addTab({ url: "https://second.example/" });

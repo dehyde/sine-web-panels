@@ -234,6 +234,27 @@ export function loadPrincipalFor(url, chromeWindow = null) {
   );
 }
 
+export function prettyPanelName(rawTitle) {
+  const stripped = String(rawTitle ?? "")
+    .replace(/^\s*[([]\d{1,4}[)\]]\s*/, "")
+    .trim();
+  if (!stripped) {
+    return null;
+  }
+
+  const parts = stripped
+    .split(/\s+[-–—|·:]\s+/)
+    .map(part => part.trim())
+    .filter(Boolean);
+  if (!parts.length) {
+    return stripped;
+  }
+
+  const last = parts[parts.length - 1];
+  // A long trailing segment is a headline, not a site name.
+  return last.length <= 40 ? last : parts[0];
+}
+
 export function titleFromUrl(url) {
   try {
     return new URL(url).hostname.replace(/^www\./, "");
@@ -412,6 +433,26 @@ export class WebPanelsStore {
 
   // Panels are titled by hostname ("mail.google.com"), which is not what anyone
   // searches for. Remember the page's own title so the finder can match "gmail".
+  // Titles stored before rememberTitle kept only the site name.
+  scrubTitles() {
+    const titles = this.lastTitles;
+    let changed = false;
+    for (const [id, title] of Object.entries(titles)) {
+      const clean = prettyPanelName(title);
+      if (clean !== title) {
+        changed = true;
+        if (clean) {
+          titles[id] = clean;
+        } else {
+          delete titles[id];
+        }
+      }
+    }
+    if (changed) {
+      this.lastTitles = titles;
+    }
+  }
+
   get lastTitles() {
     try {
       const parsed = JSON.parse(readStringPref(PREFS.lastTitles, "{}"));
@@ -425,8 +466,12 @@ export class WebPanelsStore {
     setStringPref(PREFS.lastTitles, JSON.stringify(value ?? {}));
   }
 
+  // Only the site name is kept. The full tab title is personal data that
+  // would otherwise sit in prefs.js and about:config — Gmail's carries the
+  // account address ("Inbox (1,140) - someone@gmail.com - Gmail") — and the
+  // rail and finder only ever show the site name anyway.
   rememberTitle(id, title) {
-    const clean = (title ?? "").trim();
+    const clean = prettyPanelName(title);
     if (!id || !clean) {
       return;
     }
