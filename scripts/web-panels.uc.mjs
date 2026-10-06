@@ -1279,6 +1279,13 @@ export class SineWebPanels {
     if (!parentTab || !this.#activePanelUrl() || typeof splitter?.splitTabs !== "function") {
       return false;
     }
+    // Zen's splitTabs drops hidden tabs and its empty New Tab (zen-empty-tab)
+    // before splitting, then returns nothing for a single tab. Measured on Zen
+    // 1.23b (2026-10-05): with a panel open over the empty tab, the pin was
+    // shown and silently did nothing.
+    if (parentTab.hidden || parentTab.hasAttribute?.("zen-empty-tab")) {
+      return false;
+    }
 
     const capacity = this.#splitViewCapacity(parentTab, splitter);
     return Boolean(capacity && capacity.currentTabs.length < capacity.maxTabs);
