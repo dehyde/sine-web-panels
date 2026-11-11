@@ -56,18 +56,45 @@ function panelIndexFromEvent(event) {
 // otherwise Ctrl+Cmd+1 would also fire on macOS.
 const IS_MACOS = globalThis.Services?.appinfo?.OS === "Darwin";
 
-function shortcutMatches(event, spec) {
+// Measured on Windows 11 + Zen 1.22.3b with the US-International layout
+// (2026-10-05): left Ctrl + left Alt + 1 arrives as key="¡" with
+// ctrlKey=false, altKey=false, getModifierState("AltGraph")=true — Windows
+// turns Ctrl+Alt into AltGr on any layout that has AltGr, so the shortcut
+// never matched. The modifier keydowns themselves still report ControlLeft and
+// AltLeft. Physical Ctrl + LEFT Alt therefore counts as Ctrl+Alt. The real
+// AltGr key sends AltRight (plus a fake ControlLeft) and never AltLeft, so
+// typing ä/€/¡ with AltGr keeps working.
+const MODIFIER_CODES = new Set([
+  "ControlLeft", "ControlRight", "AltLeft", "AltRight",
+  "ShiftLeft", "ShiftRight", "MetaLeft", "MetaRight",
+]);
+
+function shortcutMatches(event, spec, heldModifiers = null) {
   if (!spec || spec === "disabled" || event.repeat) {
     return false;
   }
 
-  const accelHeld = IS_MACOS ? event.metaKey : event.ctrlKey;
-  const nonAccelHeld = IS_MACOS ? event.ctrlKey : event.metaKey;
+  let ctrlKey = event.ctrlKey;
+  let altKey = event.altKey;
+  if (
+    !IS_MACOS &&
+    !ctrlKey &&
+    !altKey &&
+    heldModifiers?.has("AltLeft") &&
+    (heldModifiers.has("ControlLeft") || heldModifiers.has("ControlRight")) &&
+    event.getModifierState?.("AltGraph")
+  ) {
+    ctrlKey = true;
+    altKey = true;
+  }
+
+  const accelHeld = IS_MACOS ? event.metaKey : ctrlKey;
+  const nonAccelHeld = IS_MACOS ? ctrlKey : event.metaKey;
 
   return (
     !nonAccelHeld &&
     accelHeld === spec.includes("accel") &&
-    event.altKey === spec.includes("alt") &&
+    altKey === spec.includes("alt") &&
     event.shiftKey === spec.includes("shift")
   );
 }
@@ -196,6 +223,7 @@ export class SineWebPanels {
   // can arrive before the reset page commits.
   #homeResetPhase = null;
   #escapeTimer = null;
+  #heldModifiers = new Set();
   // Frame scripts live per frame loader; a cross-process navigation brings a
   // new one, which needs the script again.
   #escapeScriptLoaders = new WeakSet();
@@ -360,6 +388,7 @@ export class SineWebPanels {
     this.window.addEventListener("resize", this.#onWindowResize, { signal });
     this.document.addEventListener("click", this.#onDocumentClick, { signal });
     this.document.addEventListener("keydown", this.#onKeyDown, { signal });
+    this.document.addEventListener("keyup", this.#onKeyUp, { signal });
     this.window.messageManager?.addMessageListener(ESCAPE_MESSAGE, this.#escapeListener);
     this.#tabsProgressListener = {
       onLocationChange: (browser, webProgress, _request, _location, _flags) => {
@@ -2172,7 +2201,46 @@ export class SineWebPanels {
     }
   }
 
+  #onKeyUp = event => {
+    if (MODIFIER_CODES.has(event.code)) {
+      this.#heldModifiers.delete(event.code);
+    }
+  };
+
+  #shortcut(event) {
+    return shortcutMatches(event, this.#store.shortcutModifier, this.#heldModifiers);
+  }
+
+  // Next (+1) or previous (-1) panel on the rail, wrapping; separators are
+  // skipped. With none open, next starts at the first and previous at the last.
+  #cyclePanel(step) {
+    const panels = this.#items.filter(isPanel);
+    if (!panels.length) {
+      return false;
+    }
+    const activeIndex = panels.findIndex(panel => panel.id === this.#activeId);
+    const index = activeIndex < 0
+      ? (step > 0 ? 0 : panels.length - 1)
+      : (activeIndex + step + panels.length) % panels.length;
+    this.#openPanel(panels[index]);
+    return true;
+  }
+
   #onKeyDown = event => {
+    if (MODIFIER_CODES.has(event.code)) {
+      this.#heldModifiers.add(event.code);
+      // No focus event may clear this set: measured 2026-10-05, opening or
+      // closing a panel fires a window blur+focus pair while Ctrl+Alt is still
+      // held, so clearing on blur broke the second shortcut of a held chord.
+      // A left Alt whose keyup landed in another window goes stale instead —
+      // harmless, because the real AltGr key always sends AltRight first and
+      // that drops it here, so AltGr typing is never read as a shortcut.
+      if (event.code === "AltRight") {
+        this.#heldModifiers.delete("AltLeft");
+      }
+      return;
+    }
+
     // Chrome is hidden in content fullscreen, so the panel shortcuts stay
     // dormant — otherwise Ctrl+Alt+1 would open an invisible panel over the
     // video.
@@ -2204,7 +2272,7 @@ export class SineWebPanels {
 
     // Same modifier as the panel numbers, on B — hide or show the rail, the
     // binding editors use for their own sidebar.
-    if (shortcutMatches(event, this.#store.shortcutModifier) && event.code === "KeyB") {
+    if (this.#shortcut(event) && event.code === "KeyB") {
       event.preventDefault();
       event.stopPropagation();
       this.#setCollapsed(!this.#collapsed);
@@ -2213,7 +2281,7 @@ export class SineWebPanels {
 
     // Same modifier as the panel numbers, on P — "find a panel".
     if (
-      shortcutMatches(event, this.#store.shortcutModifier) &&
+      this.#shortcut(event) &&
       (event.code === "KeyD" || event.code === "KeyP")
     ) {
       event.preventDefault();
@@ -2225,20 +2293,18 @@ export class SineWebPanels {
     // Toggle the Nth panel on the rail. Separators are skipped, so the
     // numbering follows the visible panel order rather than the raw item
     // index. The modifier combination is configurable in the mod's settings.
-    if (!shortcutMatches(event, this.#store.shortcutModifier)) {
+    if (!this.#shortcut(event)) {
       return;
     }
 
-    // Backquote is the physical key immediately left of 1. Unlike event.key,
-    // event.code stays stable when the active keyboard layout changes.
-    if (event.code === "Backquote") {
-      const panels = this.#items.filter(isPanel);
-      const activeIndex = panels.findIndex(panel => panel.id === this.#activeId);
-      const target = panels[(activeIndex + 1 + panels.length) % panels.length];
-      if (target) {
+    // Q / W step to the previous / next panel; Backquote (the physical key
+    // left of 1) also steps forward. event.code, not event.key, so the keys
+    // stay put across keyboard layouts.
+    const step = event.code === "KeyQ" ? -1 : event.code === "KeyW" || event.code === "Backquote" ? 1 : 0;
+    if (step) {
+      if (this.#cyclePanel(step)) {
         event.preventDefault();
         event.stopPropagation();
-        this.#openPanel(target);
       }
       return;
     }

@@ -38,7 +38,10 @@ Shortcuts use the configurable **Panel shortcut** modifier (default: `Ctrl` / `�
 - Modifier + `1` … `0`: toggle the first … tenth panel; separators are ignored.
 - Modifier + `B`: hide or show the rail.
 - Modifier + `P` or `D`: open the panel and tab finder.
-- Modifier + the physical key immediately left of `1` (often `` ` ``, `§`, or `±`): cycle forward through panels.
+- Modifier + `W` / `Q`: next / previous panel, wrapping; separators are skipped.
+- Modifier + the physical key immediately left of `1` (often `` ` ``, `§`, or `±`): next panel too.
+
+On Windows layouts that have AltGr (US-International, Spanish, Polish, …), Windows reports Ctrl + Alt as AltGr. The shortcuts still work when Ctrl and the **left** Alt are held; the right Alt (AltGr) is left alone, so typing characters such as `ä`, `€` or `¡` with AltGr is never taken by a shortcut.
 
 ## Install
 

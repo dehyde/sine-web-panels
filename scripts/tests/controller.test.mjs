@@ -658,6 +658,135 @@ test("the Backquote shortcut advances panels across keyboard layouts, skips sepa
   assert.equal(app.root().getAttribute("active"), "panel-1", "the last panel wraps to the first");
 });
 
+// --------------------------------------------------------------------------
+// Windows turns Ctrl+Alt into AltGr on layouts that have AltGr. These are the
+// events a Keychron macro sending left Ctrl + left Alt produced on Windows 11
+// with US-International (2026-10-05): the modifier keydowns say ControlLeft /
+// AltLeft, the digit says ctrlKey=false, altKey=false, AltGraph=true.
+// --------------------------------------------------------------------------
+
+const altGraph = name => name === "AltGraph";
+
+function threePanels() {
+  const app = mount({
+    prefs: {
+      [PREFS.items]: JSON.stringify([
+        { type: "panel", id: "panel-1", url: "https://mail.example/" },
+        { type: "separator", id: "separator-1" },
+        { type: "panel", id: "panel-2", url: "https://chat.example/" },
+        { type: "panel", id: "panel-3", url: "https://plane.example/" },
+      ]),
+    },
+  });
+  app.addTab({ url: "https://news.example/", select: true });
+  const active = () => app.root().getAttribute("active");
+  const press = (code, modifiers) => app.document.dispatch("keydown", keydown(code, modifiers));
+  const release = code => app.document.dispatch("keyup", keydown(code));
+  const holdLeftCtrlAlt = () => {
+    press("ControlLeft", { key: "Control", ctrlKey: true });
+    press("AltLeft", { key: "Alt", ctrlKey: true, altKey: true });
+  };
+  const altGrKey = (code, key) => {
+    let prevented = false;
+    app.document.dispatch("keydown", keydown(code, {
+      key,
+      getModifierState: altGraph,
+      preventDefault: () => (prevented = true),
+    }));
+    return prevented;
+  };
+  return { app, active, press, release, holdLeftCtrlAlt, altGrKey };
+}
+
+test("left Ctrl+Alt reported as AltGr still toggles panel N", () => {
+  const { app, active, holdLeftCtrlAlt, altGrKey } = threePanels();
+
+  holdLeftCtrlAlt();
+  assert.equal(altGrKey("Digit1", "¡"), true, "the key is taken, not typed");
+  assert.equal(active(), "panel-1");
+  altGrKey("Digit1", "¡");
+  assert.equal(app.root().getAttribute("open"), null, "the same shortcut closes it again");
+});
+
+test("the real AltGr key keeps typing: no panel, no stolen character", () => {
+  const { active, press, altGrKey } = threePanels();
+
+  // Windows sends a fake left Ctrl with the right Alt for AltGr.
+  press("ControlLeft", { key: "Control", ctrlKey: true });
+  press("AltRight", { key: "AltGraph", getModifierState: altGraph });
+  assert.equal(altGrKey("KeyQ", "ä"), false, "ä must reach the page");
+  assert.equal(altGrKey("Digit1", "¡"), false);
+  assert.equal(active(), null);
+});
+
+test("released modifiers do not linger", () => {
+  const { active, release, holdLeftCtrlAlt, altGrKey } = threePanels();
+
+  holdLeftCtrlAlt();
+  release("ControlLeft");
+  release("AltLeft");
+  altGrKey("Digit1", "¡");
+  assert.equal(active(), null, "keyup forgets them");
+});
+
+test("Ctrl+Alt held through several shortcuts keeps working across focus churn", () => {
+  const { app, active, holdLeftCtrlAlt, altGrKey } = threePanels();
+
+  holdLeftCtrlAlt();
+  altGrKey("Digit1", "¡");
+  assert.equal(active(), "panel-1");
+  // Measured: toggling a panel fires a window blur+focus pair mid-chord.
+  app.document.dispatch("blur", {});
+  app.document.dispatch("focus", {});
+  altGrKey("Digit2", "²");
+  assert.equal(active(), "panel-2", "the second key of the held chord still counts");
+  altGrKey("KeyW", "å");
+  assert.equal(active(), "panel-3");
+});
+
+test("a stale left Alt (keyup lost to another window) never turns AltGr typing into a shortcut", () => {
+  const { active, press, holdLeftCtrlAlt, altGrKey } = threePanels();
+
+  holdLeftCtrlAlt(); // released elsewhere: no keyup ever arrives
+  press("AltRight", { key: "AltGraph", getModifierState: altGraph });
+  assert.equal(altGrKey("KeyQ", "ä"), false, "ä is typed");
+  assert.equal(active(), null);
+});
+
+test("Ctrl+Alt+W steps to the next panel and Ctrl+Alt+Q to the previous, wrapping, separators skipped", () => {
+  const { active, press } = threePanels();
+  const ctrlAlt = { ctrlKey: true, altKey: true };
+
+  press("KeyW", ctrlAlt);
+  assert.equal(active(), "panel-1", "none open: next starts at the first");
+  press("KeyW", ctrlAlt);
+  assert.equal(active(), "panel-2", "the separator is skipped");
+  press("KeyW", ctrlAlt);
+  press("KeyW", ctrlAlt);
+  assert.equal(active(), "panel-1", "the last wraps to the first");
+  press("KeyQ", ctrlAlt);
+  assert.equal(active(), "panel-3", "previous wraps from the first to the last");
+  press("KeyQ", ctrlAlt);
+  assert.equal(active(), "panel-2");
+});
+
+test("Ctrl+Alt+Q with no panel open starts at the last one", () => {
+  const { active, press } = threePanels();
+
+  press("KeyQ", { ctrlKey: true, altKey: true });
+  assert.equal(active(), "panel-3");
+});
+
+test("Q and W through AltGr from left Ctrl+Alt cycle too", () => {
+  const { active, holdLeftCtrlAlt, altGrKey } = threePanels();
+
+  holdLeftCtrlAlt();
+  altGrKey("KeyW", "å");
+  assert.equal(active(), "panel-1");
+  altGrKey("KeyQ", "ä");
+  assert.equal(active(), "panel-3");
+});
+
 test("home reloads the panel's configured URL and forgets where it drifted to", () => {
   const { app } = mountWithPanels(["https://mail.example/"]);
   app.prefs.setStringPref("sine.web-panels.last-urls", JSON.stringify({ "panel-1": "https://mail.example/thread/7" }));
