@@ -556,6 +556,21 @@ test("pin opens the panel's current location in a native split view, then closes
   assert.equal(app.root().hasAttribute("open"), false, "the Web Panel closes after the native split succeeds");
 });
 
+test("pin is not offered over Zen's empty New Tab, which Zen will not split", () => {
+  const { app, ordinary } = mountWithPanels(["https://mail.example/"]);
+  const split = installSplitView(app);
+  ordinary.setAttribute("zen-empty-tab", "");
+
+  railButton(app, "panel-1").dispatch("click");
+  const pin = navOf(app).querySelector(".sine-web-panels-nav-pin");
+
+  assert.equal(pin.hidden, true, "a button that cannot work is not shown");
+  const tabs = app.window.gBrowser.tabs.length;
+  pin.dispatch("click");
+  assert.equal(split.calls.length, 0);
+  assert.equal(app.window.gBrowser.tabs.length, tabs, "no stray tab is created");
+});
+
 test("pin appends to the right of an existing split group until its fourth pane", () => {
   const { app, ordinary } = mountWithPanels(["https://mail.example/"]);
   const second = app.addTab({ url: "https://second.example/" });
